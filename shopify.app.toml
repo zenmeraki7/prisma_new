@@ -1,0 +1,49 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "6c1a39944a4ab6bdd6e4428ccceb028b"
+name = "new"
+application_url = "https://surplus-foo-created-kathy.trycloudflare.com"
+embedded = true
+handle = "new-270"
+
+[build]
+automatically_update_urls_on_dev = true
+include_config_on_deploy = true
+
+[webhooks]
+api_version = "2025-04"
+
+  [[webhooks.subscriptions]]
+  uri = "https://contributing-cole-senate-dried.trycloudflare.com/gdpr/customer_data_erasure"
+  compliance_topics = [ "customers/redact" ]
+
+  [[webhooks.subscriptions]]
+  uri = "https://contributing-cole-senate-dried.trycloudflare.com/gdpr/customer_data_request"
+  compliance_topics = [ "customers/data_request" ]
+
+  [[webhooks.subscriptions]]
+  uri = "https://contributing-cole-senate-dried.trycloudflare.com/gdpr/shop_data_erasure"
+  compliance_topics = [ "shop/redact" ]
+
+  [[webhooks.subscriptions]]
+  topics = [ "bulk_operations/finish", "products/create" ]
+  uri = "https://a50e-2409-4073-307-d512-1554-bf40-8d5f-a82.ngrok-free.app/api/webhooks"
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "read_inventory,read_locations,read_products,write_inventory,write_products"
+
+[auth]
+redirect_urls = [
+  "https://surplus-foo-created-kathy.trycloudflare.com/auth/callback",
+  "https://surplus-foo-created-kathy.trycloudflare.com/auth/shopify/callback",
+  "https://surplus-foo-created-kathy.trycloudflare.com/api/auth/callback"
+]
+
+[app_proxy]
+url = "https://automatic-learners-excluded-decorative.trycloudflare.com/storefront/subscription"
+subpath = "proxy"
+prefix = "apps"
+
+[pos]
+embedded = false
