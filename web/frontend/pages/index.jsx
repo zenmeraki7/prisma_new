@@ -4,36 +4,40 @@ import {
   Layout,
   TextContainer,
   Image,
-  Stack,
   Link,
   Text,
+  InlineStack,
+  Box,
 } from "@shopify/polaris";
 import { TitleBar } from "@shopify/app-bridge-react";
 import { useTranslation, Trans } from "react-i18next";
 
 import { trophyImage } from "../assets";
-
 import { ProductsCard } from "../components";
 
 export default function HomePage() {
   const { t } = useTranslation();
+
   return (
     <Page narrowWidth>
       <TitleBar title={t("HomePage.title")} />
+
       <Layout>
         <Layout.Section>
-          <Card sectioned>
-            <Stack
+          <Card>
+            <InlineStack
+              gap="200"
+              align="center"
+              inlineAlignment="end"
               wrap={false}
-              spacing="extraTight"
-              distribution="trailing"
-              alignment="center"
             >
-              <Stack.Item fill>
+              {/* LEFT CONTENT */}
+              <Box flex="1">
                 <TextContainer spacing="loose">
                   <Text as="h2" variant="headingMd">
                     {t("HomePage.heading")}
                   </Text>
+
                   <p>
                     <Trans
                       i18nKey="HomePage.yourAppIsReadyToExplore"
@@ -56,7 +60,9 @@ export default function HomePage() {
                       }}
                     />
                   </p>
+
                   <p>{t("HomePage.startPopulatingYourApp")}</p>
+
                   <p>
                     <Trans
                       i18nKey="HomePage.learnMore"
@@ -71,19 +77,20 @@ export default function HomePage() {
                     />
                   </p>
                 </TextContainer>
-              </Stack.Item>
-              <Stack.Item>
-                <div style={{ padding: "0 20px" }}>
-                  <Image
-                    source={trophyImage}
-                    alt={t("HomePage.trophyAltText")}
-                    width={120}
-                  />
-                </div>
-              </Stack.Item>
-            </Stack>
+              </Box>
+
+              {/* RIGHT IMAGE */}
+              <Box paddingInlineStart="200">
+                <Image
+                  source={trophyImage}
+                  alt={t("HomePage.trophyAltText")}
+                  width={120}
+                />
+              </Box>
+            </InlineStack>
           </Card>
         </Layout.Section>
+
         <Layout.Section>
           <ProductsCard />
         </Layout.Section>

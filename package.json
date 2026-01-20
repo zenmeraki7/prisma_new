@@ -11,7 +11,10 @@
     "generate": "shopify app generate",
     "deploy": "shopify app deploy"
   },
-  "dependencies": {},
+  "dependencies": {
+    "bullmq": "^5.66.5",
+    "dotenv": "^17.2.3"
+  },
   "author": "Akhila",
   "private": true,
   "workspaces": [
