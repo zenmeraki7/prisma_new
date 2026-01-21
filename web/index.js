@@ -1,5 +1,4 @@
 // web/index.js
-
 import "dotenv/config"; // MUST be first
 import { join } from "path";
 import { readFileSync } from "fs";
@@ -13,7 +12,7 @@ import { prisma } from "./db/prisma.js";
 
 const PORT = parseInt(
   process.env.BACKEND_PORT || process.env.PORT || "3000",
-  10
+  10,
 );
 
 const STATIC_PATH =
@@ -21,71 +20,76 @@ const STATIC_PATH =
     ? `${process.cwd()}/frontend/dist`
     : `${process.cwd()}/frontend/`;
 
-// ✅ Express app
+// ──────────────────────────────────────────────
+// Express app
+// ──────────────────────────────────────────────
 const app = express();
+app.use(express.json());
 
-// ✅ Simple runtime DB test – runs once when server starts
+// ──────────────────────────────────────────────
+// Runtime DB test
+// ──────────────────────────────────────────────
 async function testDbConnection() {
   try {
     await prisma.$connect();
-    console.log("✅ Supabase DB OK. Prisma connected.");
+    console.log("✅ Database connected via Prisma");
   } catch (error) {
-    console.error("❌ Supabase DB FAILED:", error);
+    console.error("❌ Database connection failed:", error);
   }
 }
 
-/* ────────────────────────────────────────────── */
-/* Shopify authentication + webhooks              */
-/* ────────────────────────────────────────────── */
+// ──────────────────────────────────────────────
+// Shopify authentication + webhooks
+// ──────────────────────────────────────────────
 app.get(shopify.config.auth.path, shopify.auth.begin());
 
 app.get(
   shopify.config.auth.callbackPath,
   shopify.auth.callback(),
-  shopify.redirectToShopifyOrAppRoot()
+  shopify.redirectToShopifyOrAppRoot(),
 );
 
 app.post(
   shopify.config.webhooks.path,
-  shopify.processWebhooks({ webhookHandlers: PrivacyWebhookHandlers })
+  shopify.processWebhooks({ webhookHandlers: PrivacyWebhookHandlers }),
 );
 
-/* ────────────────────────────────────────────── */
-/* API auth middleware                            */
-/* ────────────────────────────────────────────── */
+// ──────────────────────────────────────────────
+// API auth middleware
+// ──────────────────────────────────────────────
 app.use("/api/*", shopify.validateAuthenticatedSession());
-app.use(express.json());
 
-/* ────────────────────────────────────────────── */
-/* Minimal GraphQL endpoint for bootstrapProducts */
-/* ────────────────────────────────────────────── */
+// ──────────────────────────────────────────────
+// GRAPHQL API (Frontend talks to this)
+// ──────────────────────────────────────────────
 app.post("/api/graphql", async (req, res) => {
   try {
-    const session = res.locals.shopify.session;
+    const session = res.locals.shopify?.session;
     if (!session) {
       return res.status(401).json({
         errors: [{ message: "Unauthenticated" }],
       });
     }
 
-    const { query, variables } = req.body ?? {};
+    const { query, variables } = req.body || {};
     if (!query || typeof query !== "string") {
       return res.status(400).json({
         errors: [{ message: "Missing GraphQL query" }],
       });
     }
 
-    // Handle only bootstrapProducts for now (enough for ProductsPage)
+    console.log("➡️ Incoming GraphQL operation");
+
+    // ──────────────────────────────────────────
+    // Handle bootstrapProducts (Products Page)
+    // ──────────────────────────────────────────
     if (query.includes("bootstrapProducts")) {
-      const first = variables?.first ?? 25;
+      const first = Number(variables?.first ?? 25);
       const after = variables?.after ?? null;
 
       const client = new shopify.api.clients.Graphql({ session });
 
-      // NOTE: Product has NO `hasImages` field in Admin API.
-      // We query images(first: 1) and compute hasImages in Node.
-      const shopifyResp = await client.request(
-        `
+      const shopifyQuery = `
         query BootstrapProducts($first: Int!, $after: String) {
           products(first: $first, after: $after) {
             edges {
@@ -98,6 +102,7 @@ app.post("/api/graphql", async (req, res) => {
                 vendor
                 productType
                 tags
+                updatedAt
                 images(first: 1) {
                   edges {
                     node {
@@ -105,21 +110,21 @@ app.post("/api/graphql", async (req, res) => {
                     }
                   }
                 }
-                updatedAt
               }
             }
           }
         }
-        `,
-        { first, after }
-      );
+      `;
 
-      const edges = shopifyResp?.data?.products?.edges ?? [];
+      const response = await client.request(shopifyQuery, {
+        variables: { first, after },
+      });
+
+      const edges = response?.data?.products?.edges || [];
 
       const items = edges.map((edge) => {
         const p = edge.node;
-        const imageEdges = p.images?.edges ?? [];
-        const hasImages = imageEdges.length > 0;
+        const hasImages = (p.images?.edges?.length || 0) > 0;
 
         return {
           id: p.id,
@@ -128,7 +133,7 @@ app.post("/api/graphql", async (req, res) => {
           status: p.status,
           vendor: p.vendor,
           productType: p.productType,
-          tags: p.tags ?? [],
+          tags: p.tags || [],
           hasImages,
           updatedAtShopify: p.updatedAt,
         };
@@ -137,8 +142,8 @@ app.post("/api/graphql", async (req, res) => {
       const nextCursor =
         edges.length > 0 ? edges[edges.length - 1].cursor : null;
 
-      // Shape expected by BOOTSTRAP_PRODUCTS_QUERY typings:
-      // bootstrapProducts { status { fastReady fastLastSyncAt fastRevision syncEnqueued } page { items nextCursor } }
+      console.log(`✅ Returned ${items.length} products`);
+
       return res.json({
         data: {
           bootstrapProducts: {
@@ -157,35 +162,50 @@ app.post("/api/graphql", async (req, res) => {
       });
     }
 
-    // Anything else is not implemented yet
+    // ──────────────────────────────────────────
+    // Unknown operation
+    // ──────────────────────────────────────────
     return res.status(400).json({
-      errors: [{ message: "Unknown GraphQL operation" }],
+      errors: [{ message: "Unsupported GraphQL operation" }],
     });
-  } catch (err) {
-    console.error("POST /api/graphql failed:", err);
+  } catch (error) {
+    console.error("❌ /api/graphql error:", error);
+
     return res.status(500).json({
-      errors: [{ message: "Internal server error" }],
+      errors: [
+        {
+          message: "GraphQL server error",
+          details: error.message,
+        },
+      ],
     });
   }
 });
 
-/* ────────────────────────────────────────────── */
-/* Existing REST endpoints                         */
-/* ────────────────────────────────────────────── */
+// ──────────────────────────────────────────────
+// Existing REST APIs
+// ──────────────────────────────────────────────
 app.get("/api/products/count", async (_req, res) => {
-  const client = new shopify.api.clients.Graphql({
-    session: res.locals.shopify.session,
-  });
+  try {
+    const client = new shopify.api.clients.Graphql({
+      session: res.locals.shopify.session,
+    });
 
-  const countData = await client.request(`
-    query shopifyProductCount {
-      productsCount {
-        count
+    const result = await client.request(`
+      query {
+        productsCount {
+          count
+        }
       }
-    }
-  `);
+    `);
 
-  res.status(200).send({ count: countData.data.productsCount.count });
+    res.status(200).send({
+      count: result.data.productsCount.count,
+    });
+  } catch (err) {
+    console.error("❌ Count error:", err);
+    res.status(500).send({ error: "Failed to fetch product count" });
+  }
 });
 
 app.post("/api/products", async (_req, res) => {
@@ -194,8 +214,8 @@ app.post("/api/products", async (_req, res) => {
 
   try {
     await productCreator(res.locals.shopify.session);
-    } catch (e) {
-    console.log(`Failed to process products/create: ${e.message}`);
+  } catch (e) {
+    console.error("❌ Product create failed:", e.message);
     status = 500;
     error = e.message;
   }
@@ -203,13 +223,13 @@ app.post("/api/products", async (_req, res) => {
   res.status(status).send({ success: status === 200, error });
 });
 
-/* ────────────────────────────────────────────── */
-/* CSP + Frontend static + catch-all               */
-/* ────────────────────────────────────────────── */
+// ──────────────────────────────────────────────
+// CSP + Static frontend
+// ──────────────────────────────────────────────
 app.use(shopify.cspHeaders());
 app.use(serveStatic(STATIC_PATH, { index: false }));
 
-// IMPORTANT: Catch-all must be LAST
+// Catch-all — MUST be last
 app.use("/*", shopify.ensureInstalledOnShop(), async (_req, res) => {
   return res
     .status(200)
@@ -217,11 +237,14 @@ app.use("/*", shopify.ensureInstalledOnShop(), async (_req, res) => {
     .send(
       readFileSync(join(STATIC_PATH, "index.html"))
         .toString()
-        .replace("%VITE_SHOPIFY_API_KEY%", process.env.SHOPIFY_API_KEY || "")
+        .replace("%VITE_SHOPIFY_API_KEY%", process.env.SHOPIFY_API_KEY || ""),
     );
 });
 
+// ──────────────────────────────────────────────
+// Start server
+// ──────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
   testDbConnection();
 });

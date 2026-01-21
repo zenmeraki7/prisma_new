@@ -1,4 +1,3 @@
-// web/frontend/hooks/useBootstrapProducts.ts
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useGraphqlClient } from "../lib/graphqlClient";
 import {
@@ -17,7 +16,6 @@ type State = {
 };
 
 const DEFAULT_PAGE_SIZE = 25;
-const POLL_INTERVAL_MS = 5000;
 
 function normalizeError(err: unknown): string {
   if (!err) return "Unknown error";
@@ -35,14 +33,18 @@ export function useBootstrapProducts() {
     error: null,
   });
 
-  const pollTimerRef = useRef<number | null>(null);
+  const inFlightRef = useRef(false);
+  const didInitRef = useRef(false);
 
   const fetchPage = useCallback(
     async (opts: { after?: string | null; append: boolean }) => {
+      if (inFlightRef.current) return;
+      inFlightRef.current = true;
+
       setState((prev) => ({
         ...prev,
         loading: true,
-        error: prev.error ?? null,
+        error: null,
       }));
 
       try {
@@ -71,80 +73,40 @@ export function useBootstrapProducts() {
           loading: false,
           error: normalizeError(e),
         }));
+      } finally {
+        inFlightRef.current = false;
       }
     },
     [query]
   );
 
   const loadInitial = useCallback(() => {
-    void fetchPage({ after: undefined, append: false });
+    fetchPage({ append: false });
   }, [fetchPage]);
 
   const loadMore = useCallback(() => {
-    setState((prev) => {
-      if (!prev.nextCursor) return prev;
-      void fetchPage({ after: prev.nextCursor, append: true });
-      return prev;
-    });
-  }, [fetchPage]);
+    if (state.loading || !state.nextCursor) return;
+    fetchPage({ after: state.nextCursor, append: true });
+  }, [fetchPage, state.loading, state.nextCursor]);
 
-  // Initial load
+  // ✅ StrictMode-safe initial load
   useEffect(() => {
+    if (didInitRef.current) return;
+    didInitRef.current = true;
     loadInitial();
   }, [loadInitial]);
 
-  // Polling while sync is in progress:
-  // - fastReady == false
-  // - syncEnqueued == true
-  // Once fastReady becomes true, polling stops.
-  useEffect(() => {
-    if (pollTimerRef.current !== null) {
-      window.clearInterval(pollTimerRef.current);
-      pollTimerRef.current = null;
-    }
-
-    const shouldPoll =
-      state.status &&
-      !state.status.fastReady &&
-      state.status.syncEnqueued === true;
-
-    if (shouldPoll) {
-      pollTimerRef.current = window.setInterval(() => {
-        loadInitial();
-      }, POLL_INTERVAL_MS);
-    }
-
-    return () => {
-      if (pollTimerRef.current !== null) {
-        window.clearInterval(pollTimerRef.current);
-        pollTimerRef.current = null;
-      }
-    };
-  }, [state.status, loadInitial]);
-
   const syncState = useMemo(() => {
     if (!state.status) {
-      return {
-        state: "unknown" as const,
-        label: "Loading sync status…",
-      };
+      return { state: "unknown" as const, label: "Loading sync status…" };
     }
     if (state.status.fastReady) {
-      return {
-        state: "ready" as const,
-        label: "FAST plane ready",
-      };
+      return { state: "ready" as const, label: "FAST plane ready" };
     }
-    if (!state.status.fastReady && state.status.syncEnqueued) {
-      return {
-        state: "syncing" as const,
-        label: "Initial sync is running…",
-      };
+    if (state.status.syncEnqueued) {
+      return { state: "syncing" as const, label: "Initial sync is running…" };
     }
-    return {
-      state: "cold" as const,
-      label: "FAST plane not ready yet",
-    };
+    return { state: "cold" as const, label: "FAST plane not ready yet" };
   }, [state.status]);
 
   return {
