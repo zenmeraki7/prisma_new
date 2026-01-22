@@ -12,6 +12,7 @@
     "deploy": "shopify app deploy"
   },
   "dependencies": {
+    "@tanstack/react-query": "^5.90.19",
     "bullmq": "^5.66.5",
     "dotenv": "^17.2.3"
   },

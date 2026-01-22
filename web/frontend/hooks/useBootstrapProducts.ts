@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useGraphqlClient } from "../lib/graphqlClient";
+import { useAppBridge } from "@shopify/app-bridge-react";
 import {
-  BOOTSTRAP_PRODUCTS_QUERY,
-  type BootstrapProductsResponse,
+  bootstrapProductsRequest,
   type ProductLiteDto,
   type BootstrapStatusDto,
 } from "../queries/bootstrapProducts";
@@ -25,7 +24,7 @@ function normalizeError(err: unknown): string {
 }
 
 export function useBootstrapProducts() {
-  const { query } = useGraphqlClient();
+  const app = useAppBridge();
 
   const [state, setState] = useState<State>({
     loading: true,
@@ -38,7 +37,7 @@ export function useBootstrapProducts() {
 
   const fetchPage = useCallback(
     async (opts: { after?: string | null; append: boolean }) => {
-      if (inFlightRef.current) return;
+      if (!app || inFlightRef.current) return;
       inFlightRef.current = true;
 
       setState((prev) => ({
@@ -48,24 +47,19 @@ export function useBootstrapProducts() {
       }));
 
       try {
-        const data = await query<BootstrapProductsResponse>(
-          BOOTSTRAP_PRODUCTS_QUERY,
-          {
-            first: DEFAULT_PAGE_SIZE,
-            after: opts.after ?? null,
-          }
-        );
-
-        const payload = data.bootstrapProducts;
+        const payload = await bootstrapProductsRequest(app, {
+          first: DEFAULT_PAGE_SIZE,
+          after: opts.after ?? null,
+        });
 
         setState((prev) => ({
           loading: false,
           error: null,
           status: payload.status,
           products: opts.append
-            ? [...prev.products, ...payload.page.items]
-            : payload.page.items,
-          nextCursor: payload.page.nextCursor ?? null,
+            ? [...prev.products, ...payload.items]
+            : payload.items,
+          nextCursor: payload.nextCursor ?? null,
         }));
       } catch (e) {
         setState((prev) => ({
@@ -77,7 +71,7 @@ export function useBootstrapProducts() {
         inFlightRef.current = false;
       }
     },
-    [query]
+    [app]
   );
 
   const loadInitial = useCallback(() => {
@@ -91,10 +85,11 @@ export function useBootstrapProducts() {
 
   // ✅ StrictMode-safe initial load
   useEffect(() => {
+    if (!app) return;
     if (didInitRef.current) return;
     didInitRef.current = true;
     loadInitial();
-  }, [loadInitial]);
+  }, [app, loadInitial]);
 
   const syncState = useMemo(() => {
     if (!state.status) {

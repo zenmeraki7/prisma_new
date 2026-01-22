@@ -21,6 +21,7 @@ export default function App() {
             <a href="/" rel="home" />
             
             <a href="products">{t("NavigationMenu.Products")}</a>
+              <a href="/FilteredProducts">Filtered products</a>
           </NavMenu>
           <Routes pages={pages} />
         </QueryProvider>

@@ -1,11 +1,35 @@
-// web/graphql/schema.ts
 import { createSchema } from "graphql-yoga";
-import { prisma } from "../db/prisma";
-import { fastSyncQueue } from "../jobs/queue";
+import { prisma } from "../db/prisma.js";
+
+import { planFilterResolver } from "./filtering/planFilterResolver.js";
+import { productsByFilterResolver } from "./filtering/productsByFilterResolver.js";
+
+import {
+  snapshotStatusResolver,
+  productsBySnapshotResolver,
+} from "./snapshots/resolvers.js";
+
+import {
+  snapshotRunsResolver,
+  snapshotRunEventsResolver,
+} from "./snapshots/historyResolvers.js";
+
+import { debugVerifySnapshotResolver } from "./debug/debugVerifySnapshotResolver.js";
+
+// Context type
+export type GraphQLContext = {
+  shopId: string;
+};
+
+/* ==========================
+   GraphQL SDL
+========================== */
 
 const typeDefs = /* GraphQL */ `
   scalar DateTime
+  scalar JSON
 
+  # --- FAST plane ---
   type ProductLite {
     id: ID!
     title: String!
@@ -16,6 +40,12 @@ const typeDefs = /* GraphQL */ `
     tags: [String!]!
     hasImages: Boolean!
     updatedAtShopify: DateTime
+  }
+
+  type VariantRollup {
+    minPrice: Float
+    maxPrice: Float
+    totalInventory: Int
   }
 
   type BootstrapStatus {
@@ -35,113 +65,194 @@ const typeDefs = /* GraphQL */ `
     page: ProductPage!
   }
 
+  enum FilterExecutionMode {
+    FAST_ONLY
+    SNAPSHOT
+  }
+
+  input PlanFilterInput {
+    filter: JSON!
+  }
+
+  type PlanFilterPayload {
+    planHash: String!
+    executionMode: FilterExecutionMode!
+    filterSummary: String
+  }
+
+  input ProductsByFilterInput {
+    filter: JSON!
+    mode: FilterExecutionMode! = FAST_ONLY
+    first: Int! = 50
+    after: String
+  }
+
+  type ProductsByFilterPage {
+    items: [ProductLite!]!
+    nextCursor: String
+    planHash: String
+  }
+
+  # --- Snapshot plane ---
+  enum SnapshotState {
+    PENDING
+    RUNNING
+    SUCCEEDED
+    FAILED
+    EXPIRED
+  }
+
+  type SnapshotStatus {
+    state: SnapshotState!
+    progress: Int!
+    total: Int!
+    errorMessage: String
+    filterSummary: String
+    planHash: String!
+    snapshotRunId: ID
+  }
+
+  type ProductsBySnapshotPage {
+    items: [ProductLite!]!
+    nextCursor: String
+    snapshotRunId: ID!
+  }
+
+  type SnapshotRun {
+    id: ID!
+    planHash: String!
+    state: SnapshotState!
+    progress: Int!
+    total: Int!
+    errorMessage: String
+    filterSummary: String
+    createdAt: DateTime!
+    updatedAt: DateTime!
+    expiresAt: DateTime
+  }
+
+  type SnapshotRunEdge {
+    cursor: String!
+    node: SnapshotRun!
+  }
+
+  type SnapshotRunConnection {
+    edges: [SnapshotRunEdge!]!
+    pageInfo: PageInfo!
+  }
+
+  type SnapshotRunEvent {
+    id: ID!
+    kind: String!
+    message: String
+    createdAt: DateTime!
+  }
+
+  type SnapshotRunEventEdge {
+    cursor: String!
+    node: SnapshotRunEvent!
+  }
+
+  type SnapshotRunEventConnection {
+    edges: [SnapshotRunEventEdge!]!
+    pageInfo: PageInfo!
+  }
+
+  type PageInfo {
+    hasNextPage: Boolean!
+    endCursor: String
+  }
+
+  type DebugVerifySnapshotPayload {
+    ok: Boolean!
+    message: String
+    mismatchedProductIds: [ID!]
+  }
+
   type Query {
     bootstrapProducts(first: Int! = 25, after: String): BootstrapProductsPayload!
+    planFilter(input: PlanFilterInput!): PlanFilterPayload!
+    productsByFilter(input: ProductsByFilterInput!): ProductsByFilterPage!
+    snapshotStatus(planHash: String!): SnapshotStatus!
+    productsBySnapshot(planHash: String!, first: Int! = 50, after: String): ProductsBySnapshotPage!
+    snapshotRuns(first: Int! = 25, after: String): SnapshotRunConnection!
+    snapshotRunEvents(runId: ID!, first: Int! = 50, after: String): SnapshotRunEventConnection!
+    debugVerifySnapshot(planHash: String!): DebugVerifySnapshotPayload!
   }
 `;
 
-function encodeCursor(d: Date): string {
-  return Buffer.from(d.toISOString(), "utf8").toString("base64url");
-}
-function decodeCursor(s: string): Date | null {
-  try {
-    const iso = Buffer.from(s, "base64url").toString("utf8");
-    const d = new Date(iso);
-    return Number.isNaN(d.getTime()) ? null : d;
-  } catch {
-    return null;
-  }
-}
+/* ==========================
+   Resolvers
+========================== */
 
-// IMPORTANT:
-// In a real Shopify app, shopId/shopDomain/accessToken come from your session middleware.
-// Here we assume ctx has them.
-type Ctx = {
-  shopId: string;
-  shopDomain: string;
-  accessToken: string;
-};
+function encodeCursor(d: Date): string {
+  return Buffer.from(d.toISOString(), "utf8").toString("base64");
+}
+function decodeCursor(c: string): Date {
+  return new Date(Buffer.from(c, "base64").toString("utf8"));
+}
 
 const resolvers = {
-  Query: {
-    bootstrapProducts: async (_: any, args: { first: number; after?: string | null }, ctx: Ctx) => {
-      const first = Math.min(Math.max(args.first ?? 25, 1), 100);
-      const afterDate = args.after ? decodeCursor(args.after) : null;
-
-      const state = await prisma.shopState.upsert({
-        where: { shopId: ctx.shopId },
-        create: { shopId: ctx.shopId, fastReady: false, fastRevision: 0 },
-        update: {},
+  ProductLite: {
+    tags: async (parent: any, _args: unknown, ctx: GraphQLContext) => {
+      const rows = await prisma.productTag.findMany({
+        where: { shopId: ctx.shopId, productId: parent.id },
+        select: { tag: true },
       });
-
-      const where: any = { shopId: ctx.shopId };
-      if (afterDate) {
-        // page by updatedAtShopify DESC. Cursor is a timestamp boundary.
-        where.updatedAtShopify = { lt: afterDate };
-      }
-
-      const items = await prisma.productLite.findMany({
-        where,
-        orderBy: [{ updatedAtShopify: "desc" }, { id: "desc" }],
-        take: first,
-        select: {
-          id: true,
-          title: true,
-          handle: true,
-          status: true,
-          vendor: true,
-          productType: true,
-          tags: true,
-          hasImages: true,
-          updatedAtShopify: true,
-        },
-      });
-
-      // If FAST is not ready and there’s no data, enqueue a full sync.
-      let syncEnqueued = false;
-      if (!state.fastReady) {
-        const anyRow = await prisma.productLite.findFirst({
-          where: { shopId: ctx.shopId },
-          select: { id: true },
-        });
-
-        if (!anyRow) {
-          const ledger = await prisma.jobLedger.create({
-            data: { shopId: ctx.shopId, type: "FAST_FULL_SYNC", status: "PENDING" },
-          });
-
-          const job = await fastSyncQueue.add("fast_full_sync", {
-            shopId: ctx.shopId,
-            shopDomain: ctx.shopDomain,
-            accessToken: ctx.accessToken,
-            jobLedgerId: ledger.id,
-          });
-
-          await prisma.jobLedger.update({
-            where: { id: ledger.id },
-            data: { queueJobId: String(job.id) },
-          });
-
-          syncEnqueued = true;
-        }
-      }
-
-      const nextCursor =
-        items.length === first && items[items.length - 1]?.updatedAtShopify
-          ? encodeCursor(items[items.length - 1].updatedAtShopify as Date)
-          : null;
-
-      return {
-        status: {
-          fastReady: state.fastReady,
-          fastLastSyncAt: state.fastLastSyncAt,
-          fastRevision: state.fastRevision,
-          syncEnqueued,
-        },
-        page: { items, nextCursor },
-      };
+      return rows.map((r) => r.tag);
     },
+  },
+
+  VariantRollup: {
+    minPrice: (parent: any) => (parent.minPrice != null ? Number(parent.minPrice) : null),
+    maxPrice: (parent: any) => (parent.maxPrice != null ? Number(parent.maxPrice) : null),
+    totalInventory: (parent: any) => parent.totalInventory,
+  },
+
+  Query: {
+    bootstrapProducts: async (_parent: unknown, args: { first: number; after?: string | null }, ctx: GraphQLContext) => {
+      const { shopId } = ctx;
+      const first = Math.min(Math.max(args.first, 1), 100);
+
+      const syncState = await prisma.fastSyncState.findUnique({ where: { shopId } });
+      const status = {
+        fastReady: syncState?.fastReady ?? false,
+        fastLastSyncAt: syncState?.fastLastSyncAt ?? null,
+        fastRevision: syncState?.fastRevision ?? 0,
+        syncEnqueued: syncState?.syncEnqueued ?? false,
+      };
+
+      const cursorFilter = args.after ? { updatedAtShopify: { lt: decodeCursor(args.after) } } : {};
+      const items = await prisma.productLite.findMany({
+        where: { shopId, ...cursorFilter },
+        orderBy: { updatedAtShopify: "desc" },
+        take: first + 1,
+      });
+
+      let nextCursor: string | null = null;
+      if (items.length > first) {
+        const last = items[first - 1];
+        if (last.updatedAtShopify) nextCursor = encodeCursor(last.updatedAtShopify);
+        items.length = first;
+      }
+
+      return { status, page: { items, nextCursor } };
+    },
+
+    planFilter: planFilterResolver,
+    productsByFilter: productsByFilterResolver,
+
+    snapshotStatus: snapshotStatusResolver,
+    productsBySnapshot: productsBySnapshotResolver,
+
+    snapshotRuns: snapshotRunsResolver,
+    snapshotRunEvents: snapshotRunEventsResolver,
+
+    debugVerifySnapshot: debugVerifySnapshotResolver,
   },
 };
 
-export const schema = createSchema({ typeDefs, resolvers });
+export const schema = createSchema({
+  typeDefs,
+  resolvers,
+});

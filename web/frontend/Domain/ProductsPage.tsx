@@ -1,158 +1,238 @@
-import React from "react";
+import React, { useMemo } from "react";
 import {
   Page,
+  Layout,
   Card,
-  Spinner,
-  Banner,
   Text,
   IndexTable,
   useIndexResourceState,
   Badge,
-  Button,
   Box,
   InlineStack,
+  Spinner,
+  Banner,
 } from "@shopify/polaris";
-import { useBootstrapProducts } from "../hooks/useBootstrapProducts";
+import { useAppBridge } from "@shopify/app-bridge-react";
+import {
+  useInfiniteQuery,
+  type UseInfiniteQueryResult,
+  type QueryFunctionContext,
+} from "@tanstack/react-query";
 
-function formatDateTime(value?: string | null): string {
-  if (!value) return "-";
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return "-";
-  return d.toLocaleString();
+import type { AppBridgeState } from "@shopify/app-bridge-react";
+import {
+  bootstrapProductsRequest,
+  type ProductLiteDto,
+  type BootstrapProductsPageDto,
+} from "../queries/bootstrapProducts";
+
+/* ----------------------- */
+/* React Query data hook   */
+/* ----------------------- */
+function useBootstrapProducts(
+  app: AppBridgeState | undefined,
+): UseInfiniteQueryResult<BootstrapProductsPageDto, Error> {
+  return useInfiniteQuery<
+    BootstrapProductsPageDto,
+    Error,
+    BootstrapProductsPageDto,
+    ["bootstrapProducts"],
+    string | null
+  >({
+    queryKey: ["bootstrapProducts"],
+    enabled: !!app,
+    initialPageParam: null,
+    queryFn: async ({
+      pageParam,
+    }: QueryFunctionContext<["bootstrapProducts"], string | null>) => {
+      if (!app) throw new Error("AppBridge not ready");
+
+      return bootstrapProductsRequest(app, {
+        first: 50,
+        after: pageParam,
+      });
+    },
+    getNextPageParam: (lastPage) =>
+      lastPage.nextCursor ?? null,
+  });
 }
 
-function statusToBadge(status: string) {
-  const normalized = status.toLowerCase();
-  if (normalized === "active") return <Badge tone="success">Active</Badge>;
-  if (normalized === "draft") return <Badge tone="attention">Draft</Badge>;
-  if (normalized === "archived") return <Badge tone="critical">Archived</Badge>;
-  return <Badge tone="new">{status}</Badge>;
-}
+/* ----------------------- */
+/* Page component          */
+/* ----------------------- */
+export default function ProductsPage() {
+  const app = useAppBridge();
+  const query = useBootstrapProducts(app);
 
-export function ProductsPage() {
-  const {
-    loading,
-    error,
-    products,
-    syncState,
-    status,
-    nextCursor,
-    reload,
-    loadMore,
-  } = useBootstrapProducts();
+  const status = query.data?.pages[0]?.status;
+
+  const allItems: ProductLiteDto[] = useMemo(() => {
+    if (!query.data) return [];
+    return query.data.pages.flatMap((p) => p.items);
+  }, [query.data]);
+
+  const resourceName = {
+    singular: "product",
+    plural: "products",
+  };
 
   const { selectedResources, allResourcesSelected, handleSelectionChange } =
-    useIndexResourceState(products, {
-      resourceName: { singular: "product", plural: "products" },
-      idForItem: (item) => item.id,
+    useIndexResourceState(allItems, {
+      resourceIDResolver: (product) => product.id,
     });
 
+  const loadingInitial = query.isLoading;
+  const loadingMore = query.isFetchingNextPage;
+
   return (
-    <Page
-      fullWidth
-      title="Products"
-      subtitle="Fast plane listing backed by Shopify Bulk Operations"
-    >
-      {/* Status banner */}
-      <Box paddingBlockEnd="400">
-        {syncState.state === "ready" && (
-          <Banner tone="success" title="FAST plane ready">
-            <p>
-              Last sync:{" "}
-              {status?.fastLastSyncAt
-                ? formatDateTime(status.fastLastSyncAt)
-                : "not recorded"}{" "}
-              · Revision {status?.fastRevision ?? 0}
-            </p>
-          </Banner>
-        )}
-      </Box>
-
-      {error && (
-        <Banner
-          tone="critical"
-          title="Failed to load products"
-          action={{ content: "Retry", onAction: reload }}
-        >
-          <p>{error}</p>
-        </Banner>
-      )}
-
-      <Card padding="0">
-        {loading && products.length === 0 ? (
-          <Box padding="600" inlineAlign="center">
-            <Spinner size="large" />
-          </Box>
-        ) : (
-          <>
-            <IndexTable
-              resourceName={{ singular: "product", plural: "products" }}
-              itemCount={products.length}
-              selectedItemsCount={
-                allResourcesSelected ? "All" : selectedResources.length
-              }
-              onSelectionChange={handleSelectionChange}
-              headings={[
-                { title: "Title" },
-                { title: "Status" },
-                { title: "Vendor" },
-                { title: "Type" },
-                { title: "Has images" },
-                { title: "Last updated" },
-              ]}
-            >
-              {products.map((product, index) => (
-                <IndexTable.Row
-                  id={product.id}
-                  key={product.id}
-                  position={index}
+    <Page title="Products (FAST plane)">
+      <Layout>
+        <Layout.Section>
+          <Card>
+            <Box padding="400">
+              {status ? (
+                <InlineStack
+                  gap="400"
+                  align="space-between"
+                  blockAlign="center"
                 >
-                  <IndexTable.Cell>
-                    <Text fontWeight="semibold">{product.title}</Text>
-                    <Text tone="subdued" variant="bodySm">
-                      /{product.handle}
-                    </Text>
-                  </IndexTable.Cell>
-
-                  <IndexTable.Cell>
-                    {statusToBadge(product.status)}
-                  </IndexTable.Cell>
-
-                  <IndexTable.Cell>{product.vendor || "-"}</IndexTable.Cell>
-                  <IndexTable.Cell>
-                    {product.productType || "-"}
-                  </IndexTable.Cell>
-
-                  <IndexTable.Cell>
-                    <Badge tone={product.hasImages ? "success" : "subdued"}>
-                      {product.hasImages ? "Yes" : "No"}
+                  <InlineStack gap="200" blockAlign="center">
+                    <Badge tone={status.fastReady ? "success" : "critical"}>
+                      FAST {status.fastReady ? "ready" : "not ready"}
                     </Badge>
-                  </IndexTable.Cell>
-
-                  <IndexTable.Cell>
-                    {formatDateTime(product.updatedAtShopify)}
-                  </IndexTable.Cell>
-                </IndexTable.Row>
-              ))}
-            </IndexTable>
-
-            {nextCursor && (
-              <Box paddingBlockStart="200" paddingInlineStart="800">
-                <InlineStack align="start">
-                  <Button
-                    variant="primary"
-                    onClick={loadMore}
-                    loading={loading}
-                    disabled={!nextCursor}
-                  >
-                    Load more products
-                  </Button>
+                    <Text as="span" variant="bodySm" tone="subdued">
+                      Rev {status.fastRevision}
+                    </Text>
+                    {status.fastLastSyncAt && (
+                      <Text as="span" variant="bodySm" tone="subdued">
+                        Last sync:{" "}
+                        {new Date(status.fastLastSyncAt).toLocaleString()}
+                      </Text>
+                    )}
+                  </InlineStack>
+                  {status.syncEnqueued && (
+                    <Badge tone="attention">Sync enqueued</Badge>
+                  )}
                 </InlineStack>
-              </Box>
+              ) : (
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Loading FAST sync status…
+                </Text>
+              )}
+            </Box>
+          </Card>
+        </Layout.Section>
+
+        <Layout.Section>
+          <Card>
+            <Box padding="400">
+              {loadingInitial && (
+                <InlineStack align="center" gap="200" blockAlign="center">
+                  <Spinner />
+                  <Text as="p">Loading products…</Text>
+                </InlineStack>
+              )}
+
+              {!loadingInitial && !allItems.length && (
+                <Banner tone="info">
+                  <p>No products found in FAST plane yet.</p>
+                  <p>The initial sync might still be running.</p>
+                </Banner>
+              )}
+            </Box>
+
+            {!loadingInitial && allItems.length > 0 && (
+              <>
+                <IndexTable
+                  resourceName={resourceName}
+                  itemCount={allItems.length}
+                  selectedItemsCount={
+                    allResourcesSelected ? "All" : selectedResources.length
+                  }
+                  onSelectionChange={handleSelectionChange}
+                  headings={[
+                    { title: "Title" },
+                    { title: "Status" },
+                    { title: "Vendor" },
+                    { title: "Type" },
+                    { title: "Tags" },
+                    { title: "Images" },
+                    { title: "Updated" },
+                  ]}
+                >
+                  {allItems.map((product, index) => (
+                    <IndexTable.Row
+                      id={product.id}
+                      key={product.id}
+                      position={index}
+                      selected={selectedResources.includes(product.id)}
+                    >
+                      <IndexTable.Cell>
+                        <Text as="span" fontWeight="semibold">
+                          {product.title}
+                        </Text>
+                        <Text as="div" variant="bodySm" tone="subdued">
+                          {product.handle}
+                        </Text>
+                      </IndexTable.Cell>
+                      <IndexTable.Cell>
+                        <Badge
+                          tone={
+                            product.status === "ACTIVE"
+                              ? "success"
+                              : "subdued"
+                          }
+                        >
+                          {product.status}
+                        </Badge>
+                      </IndexTable.Cell>
+                      <IndexTable.Cell>
+                        {product.vendor || "—"}
+                      </IndexTable.Cell>
+                      <IndexTable.Cell>
+                        {product.productType || "—"}
+                      </IndexTable.Cell>
+                      <IndexTable.Cell>
+                        {product.tags.length
+                          ? product.tags.join(", ")
+                          : "—"}
+                      </IndexTable.Cell>
+                      <IndexTable.Cell>
+                        <Badge tone={product.hasImages ? "success" : "critical"}>
+                          {product.hasImages ? "Yes" : "No"}
+                        </Badge>
+                      </IndexTable.Cell>
+                      <IndexTable.Cell>
+                        <Text variant="bodySm" tone="subdued">
+                          {product.updatedAtShopify
+                            ? new Date(
+                                product.updatedAtShopify,
+                              ).toLocaleString()
+                            : "—"}
+                        </Text>
+                      </IndexTable.Cell>
+                    </IndexTable.Row>
+                  ))}
+                </IndexTable>
+
+                {query.hasNextPage && (
+                  <Box padding="400">
+                    <InlineStack align="center">
+                      <button
+                        type="button"
+                        onClick={() => query.fetchNextPage()}
+                        disabled={loadingMore}
+                      >
+                        {loadingMore ? "Loading…" : "Load more"}
+                      </button>
+                    </InlineStack>
+                  </Box>
+                )}
+              </>
             )}
-          </>
-        )}
-      </Card>
+          </Card>
+        </Layout.Section>
+      </Layout>
     </Page>
   );
 }

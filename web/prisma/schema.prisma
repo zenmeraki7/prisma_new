@@ -1,4 +1,5 @@
 // prisma/schema.prisma
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -8,86 +9,240 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum JobType {
-  FAST_FULL_SYNC
-  FAST_DELTA_REFRESH
-  SNAPSHOT_RUN
-}
+/* ============
+   ENUMS
+   ============ */
 
-enum JobStatus {
+enum SnapshotState {
   PENDING
   RUNNING
   SUCCEEDED
   FAILED
+  EXPIRED
 }
 
-model ShopState {
-  shopId         String   @id
-  fastReady      Boolean  @default(false)
-  fastLastSyncAt DateTime?
-  fastRevision   Int      @default(0)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+enum SnapshotRunEventKind {
+  INFO
+  WARNING
+  ERROR
 }
+
+enum BulkJobState {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+/* ============
+   CORE SHOP MODEL
+   ============ */
+
+model Shop {
+  id              String           @id @default(cuid())
+  shopDomain      String           @unique
+  accessToken     String
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  // FAST plane
+  productLites    ProductLite[]
+  fastSyncState   FastSyncState?
+
+  // SNAPSHOT plane
+  snapshotRuns    SnapshotRun[]
+  snapshotProducts SnapshotProduct[]
+  snapshotEvents  SnapshotRunEvent[]
+
+  // Bulk jobs
+  bulkOpsJobs     BulkOpsJob[]
+  bulkOpsEvents   BulkOpsJobEvent[]
+
+  // Idempotency
+  idempotencyLedger IdempotencyLedger[]
+}
+
+/* ============
+   FAST PLANE
+   ============ */
 
 model ProductLite {
-  id          String   @id // Shopify Product GID (stable, no extra mapping needed)
+  /// Shopify product GID or numeric ID (as string). Scoped by shopId in PK.
+  id                String
+  shopId            String
+  title             String
+  handle            String
+  status            String        // "ACTIVE" | "DRAFT" | "ARCHIVED" etc.
+  vendor            String?
+  productType       String?
+  hasImages         Boolean       @default(false)
+  updatedAtShopify  DateTime?
+
+  shop              Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  tags              ProductTag[]
+  collections       ProductCollection[]
+  variantRollup     VariantRollup?
+
+  @@id([shopId, id])
+  @@index([shopId, status])
+  @@index([shopId, vendor])
+  @@index([shopId, productType])
+  @@index([shopId, updatedAtShopify])
+}
+
+model ProductTag {
+  shopId    String
+  productId String
+  tag       String
+
+  product   ProductLite @relation(fields: [shopId, productId], references: [shopId, id], onDelete: Cascade)
+
+  @@id([shopId, productId, tag])
+  @@index([shopId, tag])
+}
+
+model ProductCollection {
   shopId      String
-  title       String
-  handle      String
-  status      String
-  vendor      String?
-  productType String?
-  tags        String[] @default([])
-  hasImages   Boolean  @default(false)
+  productId   String
+  collectionId String
 
-  createdAtShopify   DateTime?
-  updatedAtShopify   DateTime?
-  publishedAtShopify DateTime?
+  product     ProductLite @relation(fields: [shopId, productId], references: [shopId, id], onDelete: Cascade)
 
-  // for sorting/paging in UI:
-  updatedAt DateTime @default(now()) @updatedAt
-
-  @@index([shopId, updatedAtShopify(sort: Desc)])
-  @@index([shopId, title])
-  @@unique([shopId, id])
+  @@id([shopId, productId, collectionId])
+  @@index([shopId, collectionId])
 }
 
 model VariantRollup {
-  // One row per product. Keep it tiny and indexed.
-  shopId    String
-  productId String
+  shopId         String
+  productId      String
+  minPrice       Decimal?  @db.Decimal(18, 2)
+  maxPrice       Decimal?  @db.Decimal(18, 2)
+  totalInventory Int?
 
-  variantCount          Int     @default(0)
-  totalInventory        Int     @default(0)
-  minPrice              Decimal? @db.Decimal(18, 6)
-  maxPrice              Decimal? @db.Decimal(18, 6)
-  hasOutOfStockVariant  Boolean @default(false)
-  hasInStockVariant     Boolean @default(false)
-
-  updatedAt DateTime @default(now()) @updatedAt
+  product        ProductLite @relation(fields: [shopId, productId], references: [shopId, id], onDelete: Cascade)
 
   @@id([shopId, productId])
   @@index([shopId, totalInventory])
 }
 
-model JobLedger {
-  id        String    @id @default(cuid())
-  shopId    String
-  type      JobType
-  status    JobStatus @default(PENDING)
+model FastSyncState {
+  shopId         String   @id
+  fastReady      Boolean  @default(false)
+  fastLastSyncAt DateTime?
+  fastRevision   Int      @default(0)
+  syncEnqueued   Boolean  @default(false)
 
-  // BullMQ job id, if applicable
-  queueJobId String?
+  shop           Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+}
 
-  startedAt  DateTime?
-  finishedAt DateTime?
-  error      String?
+/* ============
+   SNAPSHOT PLANE
+   ============ */
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+model SnapshotRun {
+  id            String        @id @default(cuid())
+  shopId        String
+  planHash      String        // hash of filter DSL + registry version
+  state         SnapshotState @default(PENDING)
+  progress      Int           @default(0)
+  total         Int           @default(0)
+  errorMessage  String?
+  filterSummary String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  expiresAt     DateTime?
 
-  @@index([shopId, type, status])
+  shop          Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  products      SnapshotProduct[]
+  events        SnapshotRunEvent[]
+
+  @@index([shopId, planHash])
   @@index([shopId, createdAt])
+  @@index([state])
+  @@index([expiresAt])
+}
+
+model SnapshotProduct {
+  snapshotRunId String
+  shopId        String
+  productId     String
+  sortKey       DateTime?     // e.g. updatedAtShopify for deterministic ordering
+
+  snapshotRun   SnapshotRun   @relation(fields: [snapshotRunId], references: [id], onDelete: Cascade)
+  shop          Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@id([snapshotRunId, productId])
+  @@index([shopId, productId])
+}
+
+model SnapshotRunEvent {
+  id            String                @id @default(cuid())
+  snapshotRunId String
+  shopId        String
+  kind          SnapshotRunEventKind  @default(INFO)
+  message       String?
+  createdAt     DateTime              @default(now())
+
+  snapshotRun   SnapshotRun           @relation(fields: [snapshotRunId], references: [id], onDelete: Cascade)
+  shop          Shop                  @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([snapshotRunId, createdAt])
+  @@index([shopId, createdAt])
+}
+
+/* ============
+   BULK JOBS
+   ============ */
+
+model BulkOpsJob {
+  id            String        @id @default(cuid())
+  shopId        String
+  scopeType     String        // e.g. "SNAPSHOT_RUN", "FILTER_EXPR", "EXPLICIT_IDS"
+  scopeRef      String        // e.g. snapshotRunId or planHash
+  actionKind    String        // e.g. "ADD_TAG", "SET_PRICE"
+  actionPayload Json          // serialized action, aligned with registry
+  state         BulkJobState  @default(PENDING)
+  total         Int           @default(0)
+  processed     Int           @default(0)
+  errorMessage  String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  shop          Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  events        BulkOpsJobEvent[]
+
+  @@index([shopId, createdAt])
+  @@index([shopId, state])
+}
+
+model BulkOpsJobEvent {
+  id        String     @id @default(cuid())
+  jobId     String
+  shopId    String
+  kind      String     // e.g. "INFO", "ERROR"
+  message   String?
+  createdAt DateTime   @default(now())
+
+  job       BulkOpsJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  shop      Shop       @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([jobId, createdAt])
+  @@index([shopId, createdAt])
+}
+
+/* ============
+   IDEMPOTENCY
+   ============ */
+
+model IdempotencyLedger {
+  id        String   @id @default(cuid())
+  shopId    String
+  scope     String   // e.g. "BULK_JOB", "SNAPSHOT_RUN"
+  key       String   // something uniquely describing the operation
+  createdAt DateTime @default(now())
+
+  shop      Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@unique([shopId, scope, key])
 }

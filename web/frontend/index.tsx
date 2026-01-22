@@ -1,58 +1,37 @@
-// web/frontend/index.tsx
 import React from "react";
 import ReactDOM from "react-dom/client";
-import {AppProvider as PolarisAppProvider} from "@shopify/polaris";
-import {Provider as AppBridgeProvider} from "@shopify/app-bridge-react";
+import { AppProvider as PolarisAppProvider } from "@shopify/polaris";
+import AppBridgeProvider from "@shopify/app-bridge-react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import enTranslations from "@shopify/polaris/locales/en.json";
 
 import "@shopify/polaris/build/esm/styles.css";
-
 import App from "./App";
 
-type AppBridgeConfig = {
-  apiKey: string;
-  host: string;
-  forceRedirect: boolean;
-};
+const queryClient = new QueryClient();
 
-function getAppBridgeConfig(): AppBridgeConfig | undefined {
-  const host = new URLSearchParams(window.location.search).get("host");
-  const apiKey = document
+const host = new URLSearchParams(window.location.search).get("host");
+const apiKey =
+  document
     .querySelector<HTMLMetaElement>('meta[name="shopify-api-key"]')
-    ?.content;
+    ?.content ?? "";
 
-  if (!host || !apiKey) {
-    console.warn("Missing host or shopify-api-key meta tag for App Bridge");
-    return undefined;
-  }
+const root = ReactDOM.createRoot(
+  document.getElementById("app") as HTMLElement,
+);
 
-  return {
-    apiKey,
-    host,
-    forceRedirect: true,
-  };
-}
-
-const appBridgeConfig = getAppBridgeConfig();
-
-const container = document.getElementById("app")!;
-const root = ReactDOM.createRoot(container);
-
-if (!appBridgeConfig) {
-  root.render(
-    <PolarisAppProvider i18n={enTranslations}>
-      <div style={{padding: 16}}>
-        App Bridge configuration missing. Make sure to inject the
-        <code>shopify-api-key</code> meta tag and <code>host</code> query param.
-      </div>
-    </PolarisAppProvider>,
-  );
-} else {
-  root.render(
-    <PolarisAppProvider i18n={enTranslations}>
-      <AppBridgeProvider config={appBridgeConfig}>
+root.render(
+  <PolarisAppProvider i18n={enTranslations}>
+    <AppBridgeProvider
+      config={{
+        apiKey,
+        host: host!,
+        forceRedirect: true,
+      }}
+    >
+      <QueryClientProvider client={queryClient}>
         <App />
-      </AppBridgeProvider>
-    </PolarisAppProvider>,
-  );
-}
+      </QueryClientProvider>
+    </AppBridgeProvider>
+  </PolarisAppProvider>,
+);
