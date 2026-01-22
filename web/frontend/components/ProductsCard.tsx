@@ -2,7 +2,11 @@ import { useState } from "react";
 import { Card, TextContainer, Text } from "@shopify/polaris";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { useTranslation } from "react-i18next";
-import { useQuery } from "react-query";
+import { useQuery } from "@tanstack/react-query"; // ✅ v4/v5 package
+
+type ProductCountResponse = {
+  count: number;
+};
 
 export function ProductsCard() {
   const shopify = useAppBridge();
@@ -14,37 +18,48 @@ export function ProductsCard() {
     data,
     refetch: refetchProductCount,
     isLoading: isLoadingCount,
-  } = useQuery({
+  } = useQuery<ProductCountResponse>({
     queryKey: ["productCount"],
     queryFn: async () => {
       const response = await fetch("/api/products/count");
-      return await response.json();
+      if (!response.ok) {
+        throw new Error("Failed to fetch product count");
+      }
+      return (await response.json()) as ProductCountResponse;
     },
     refetchOnWindowFocus: false,
   });
 
-  const setPopulating = (flag) => {
-    shopify.loading(flag);
+  const setPopulatingSafe = (flag: boolean) => {
+    // You may eventually switch this to App Bridge loading utilities
+    // depending on how you're handling global loading state.
+    // @ts-ignore – if your app-bridge typings don't expose loading/toast helpers
+    shopify.loading?.(flag);
     setIsPopulating(flag);
   };
 
   const handlePopulate = async () => {
-    setPopulating(true);
-    const response = await fetch("/api/products", { method: "POST" });
+    setPopulatingSafe(true);
 
-    if (response.ok) {
-      await refetchProductCount();
+    try {
+      const response = await fetch("/api/products", { method: "POST" });
 
-      shopify.toast.show(
-        t("ProductsCard.productsCreatedToast", { count: productsCount })
-      );
-    } else {
-      shopify.toast.show(t("ProductsCard.errorCreatingProductsToast"), {
-        isError: true,
-      });
+      if (response.ok) {
+        await refetchProductCount();
+
+        // @ts-ignore – adapt to your toast helper
+        shopify.toast?.show(
+          t("ProductsCard.productsCreatedToast", { count: productsCount }),
+        );
+      } else {
+        // @ts-ignore – adapt to your toast helper
+        shopify.toast?.show(t("ProductsCard.errorCreatingProductsToast"), {
+          isError: true,
+        });
+      }
+    } finally {
+      setPopulatingSafe(false);
     }
-
-    setPopulating(false);
   };
 
   return (

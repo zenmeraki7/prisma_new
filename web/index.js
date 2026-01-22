@@ -10,10 +10,7 @@ import productCreator from "./product-creator.js";
 import PrivacyWebhookHandlers from "./privacy.js";
 import { prisma } from "./db/prisma.js";
 
-const PORT = parseInt(
-  process.env.BACKEND_PORT || process.env.PORT || "3000",
-  10,
-);
+const PORT = parseInt(process.env.BACKEND_PORT || process.env.PORT || "3000", 10);
 
 const STATIC_PATH =
   process.env.NODE_ENV === "production"
@@ -42,17 +39,8 @@ async function testDbConnection() {
 // Shopify authentication + webhooks
 // ──────────────────────────────────────────────
 app.get(shopify.config.auth.path, shopify.auth.begin());
-
-app.get(
-  shopify.config.auth.callbackPath,
-  shopify.auth.callback(),
-  shopify.redirectToShopifyOrAppRoot(),
-);
-
-app.post(
-  shopify.config.webhooks.path,
-  shopify.processWebhooks({ webhookHandlers: PrivacyWebhookHandlers }),
-);
+app.get(shopify.config.auth.callbackPath, shopify.auth.callback(), shopify.redirectToShopifyOrAppRoot());
+app.post(shopify.config.webhooks.path, shopify.processWebhooks({ webhookHandlers: PrivacyWebhookHandlers }));
 
 // ──────────────────────────────────────────────
 // API auth middleware
@@ -60,34 +48,22 @@ app.post(
 app.use("/api/*", shopify.validateAuthenticatedSession());
 
 // ──────────────────────────────────────────────
-// GRAPHQL API (Frontend talks to this)
+// GRAPHQL API
 // ──────────────────────────────────────────────
 app.post("/api/graphql", async (req, res) => {
   try {
     const session = res.locals.shopify?.session;
-    if (!session) {
-      return res.status(401).json({
-        errors: [{ message: "Unauthenticated" }],
-      });
-    }
+    if (!session) return res.status(401).json({ errors: [{ message: "Unauthenticated" }] });
 
     const { query, variables } = req.body || {};
-    if (!query || typeof query !== "string") {
-      return res.status(400).json({
-        errors: [{ message: "Missing GraphQL query" }],
-      });
-    }
+    if (!query || typeof query !== "string") return res.status(400).json({ errors: [{ message: "Missing GraphQL query" }] });
 
-    console.log("➡️ Incoming GraphQL operation");
+    const client = new shopify.api.clients.Graphql({ session });
 
-    // ──────────────────────────────────────────
-    // Handle bootstrapProducts (Products Page)
-    // ──────────────────────────────────────────
+    // ───── bootstrapProducts ─────
     if (query.includes("bootstrapProducts")) {
       const first = Number(variables?.first ?? 25);
       const after = variables?.after ?? null;
-
-      const client = new shopify.api.clients.Graphql({ session });
 
       const shopifyQuery = `
         query BootstrapProducts($first: Int!, $after: String) {
@@ -105,9 +81,7 @@ app.post("/api/graphql", async (req, res) => {
                 updatedAt
                 images(first: 1) {
                   edges {
-                    node {
-                      id
-                    }
+                    node { id }
                   }
                 }
               }
@@ -115,17 +89,11 @@ app.post("/api/graphql", async (req, res) => {
           }
         }
       `;
-
-      const response = await client.request(shopifyQuery, {
-        variables: { first, after },
-      });
-
+      const response = await client.request(shopifyQuery, { variables: { first, after } });
       const edges = response?.data?.products?.edges || [];
 
       const items = edges.map((edge) => {
         const p = edge.node;
-        const hasImages = (p.images?.edges?.length || 0) > 0;
-
         return {
           id: p.id,
           title: p.title,
@@ -134,51 +102,51 @@ app.post("/api/graphql", async (req, res) => {
           vendor: p.vendor,
           productType: p.productType,
           tags: p.tags || [],
-          hasImages,
+          hasImages: (p.images?.edges?.length || 0) > 0,
           updatedAtShopify: p.updatedAt,
         };
       });
 
-      const nextCursor =
-        edges.length > 0 ? edges[edges.length - 1].cursor : null;
-
-      console.log(`✅ Returned ${items.length} products`);
+      const nextCursor = edges.length > 0 ? edges[edges.length - 1].cursor : null;
 
       return res.json({
-        data: {
-          bootstrapProducts: {
-            status: {
-              fastReady: true,
-              syncEnqueued: false,
-              fastLastSyncAt: new Date().toISOString(),
-              fastRevision: 1,
-            },
-            page: {
-              items,
-              nextCursor,
-            },
-          },
-        },
+        data: { bootstrapProducts: { status: { fastReady: true, syncEnqueued: false, fastLastSyncAt: new Date().toISOString(), fastRevision: 1 }, page: { items, nextCursor } } },
       });
     }
 
-    // ──────────────────────────────────────────
-    // Unknown operation
-    // ──────────────────────────────────────────
-    return res.status(400).json({
-      errors: [{ message: "Unsupported GraphQL operation" }],
-    });
+    // ───── productsByFilter (FAST-plane) ─────
+    if (query.includes("productsByFilter")) {
+      const first = Number(variables?.first ?? 50);
+      const after = variables?.after ?? null;
+      const filter = variables?.filter || {};
+      const mode = variables?.mode || "FAST_ONLY";
+
+      // Build Prisma where clause dynamically from filter
+      const where = {};
+      if (filter?.status) where.status = filter.status;
+      if (filter?.vendor) where.vendor = { contains: filter.vendor };
+      if (filter?.productType) where.productType = { contains: filter.productType };
+      if (filter?.tags?.length) where.tags = { hasEvery: filter.tags };
+      if (filter?.hasImages !== undefined) where.hasImages = filter.hasImages;
+      if (filter?.minTotalInventory !== undefined) where.totalInventory = { gte: Number(filter.minTotalInventory) };
+
+      const items = await prisma.product_lite.findMany({
+        where,
+        orderBy: { updatedAtShopify: "desc" },
+        take: first,
+        skip: after ? parseInt(after, 10) : 0,
+      });
+
+      const nextCursor = items.length ? String((after ? parseInt(after, 10) : 0) + items.length) : null;
+
+      return res.json({ data: { productsByFilter: { items, nextCursor, mode } } });
+    }
+
+    // ───── unknown operation ─────
+    return res.status(400).json({ errors: [{ message: "Unsupported GraphQL operation" }] });
   } catch (error) {
     console.error("❌ /api/graphql error:", error);
-
-    return res.status(500).json({
-      errors: [
-        {
-          message: "GraphQL server error",
-          details: error.message,
-        },
-      ],
-    });
+    return res.status(500).json({ errors: [{ message: "GraphQL server error", details: error.message }] });
   }
 });
 
@@ -187,21 +155,9 @@ app.post("/api/graphql", async (req, res) => {
 // ──────────────────────────────────────────────
 app.get("/api/products/count", async (_req, res) => {
   try {
-    const client = new shopify.api.clients.Graphql({
-      session: res.locals.shopify.session,
-    });
-
-    const result = await client.request(`
-      query {
-        productsCount {
-          count
-        }
-      }
-    `);
-
-    res.status(200).send({
-      count: result.data.productsCount.count,
-    });
+    const client = new shopify.api.clients.Graphql({ session: res.locals.shopify.session });
+    const result = await client.request(`query { productsCount { count } }`);
+    res.status(200).send({ count: result.data.productsCount.count });
   } catch (err) {
     console.error("❌ Count error:", err);
     res.status(500).send({ error: "Failed to fetch product count" });
@@ -211,7 +167,6 @@ app.get("/api/products/count", async (_req, res) => {
 app.post("/api/products", async (_req, res) => {
   let status = 200;
   let error = null;
-
   try {
     await productCreator(res.locals.shopify.session);
   } catch (e) {
@@ -219,7 +174,6 @@ app.post("/api/products", async (_req, res) => {
     status = 500;
     error = e.message;
   }
-
   res.status(status).send({ success: status === 200, error });
 });
 
@@ -234,11 +188,7 @@ app.use("/*", shopify.ensureInstalledOnShop(), async (_req, res) => {
   return res
     .status(200)
     .set("Content-Type", "text/html")
-    .send(
-      readFileSync(join(STATIC_PATH, "index.html"))
-        .toString()
-        .replace("%VITE_SHOPIFY_API_KEY%", process.env.SHOPIFY_API_KEY || ""),
-    );
+    .send(readFileSync(join(STATIC_PATH, "index.html")).toString().replace("%VITE_SHOPIFY_API_KEY%", process.env.SHOPIFY_API_KEY || ""));
 });
 
 // ──────────────────────────────────────────────

@@ -10,7 +10,12 @@
   "NavigationMenu": {
     "pageName": "Page name",
     "products": "Products",
-    "Products": "Products"
+    "Products": "Products",
+    "FilteredProducts": "Filtered Products",
+    "FilteredProductsPage": "Filterd Products",
+    "ProductsIndexPage": "Products Index Page",
+    "SnapsshotJobsPage": "Snaps shot Jobs Page",
+    "SnapshotJobsPage": "Snap shot Jobs Page"
   },
   "NotFound": {
     "description": "Check the URL and try again, or use the search bar to find what you need.",

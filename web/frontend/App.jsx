@@ -19,9 +19,11 @@ export default function App() {
         <QueryProvider>
           <NavMenu>
             <a href="/" rel="home" />
-            
+
             <a href="products">{t("NavigationMenu.Products")}</a>
-              <a href="/FilteredProducts">Filtered products</a>
+            <a href="filteredProductspage">{t("NavigationMenu.FilteredProductsPage")}</a>
+            <a href="productsindexPage">{t("NavigationMenu.ProductsIndexPage")}</a>
+            <a href="snapshotjobspage">{t("NavigationMenu.SnapshotJobsPage")}</a>
           </NavMenu>
           <Routes pages={pages} />
         </QueryProvider>

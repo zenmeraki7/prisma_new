@@ -85,7 +85,7 @@ export default function ProductsPage() {
   const loadingMore = query.isFetchingNextPage;
 
   return (
-    <Page title="Products (FAST plane)">
+    <Page fullWidth title="Products (FAST plane)">
       <Layout>
         <Layout.Section>
           <Card>
