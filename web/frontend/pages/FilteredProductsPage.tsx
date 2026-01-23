@@ -34,6 +34,7 @@ import {
   productsByFilterRequest,
   type ProductLiteDto,
 } from "../queries/productsByFilter";
+import { FILTER_REGISTRY, type FilterDefinition } from "../../lib/filters/registry";
 
 // Helper to build a filter leaf when value is present
 function leafIf(cond: boolean, filterId: FilterId, op: any, value: unknown): FilterExpr | null {
@@ -52,10 +53,14 @@ function buildFilterExprFromUi(params: {
 }): FilterExpr | null {
   const children: FilterExpr[] = [];
 
+  const vendor = params.vendor.trim().toLowerCase();
+  const productType = params.productType.trim().toLowerCase();
+  const tag = params.tag.trim().toLowerCase();
+
   if (params.status !== "ALL") children.push(leaf("product.status", "eq", params.status.toUpperCase()));
-  if (params.vendor.trim()) children.push(leaf("product.vendor", "contains", params.vendor.trim()));
-  if (params.productType.trim()) children.push(leaf("product.productType", "contains", params.productType.trim()));
-  if (params.tag.trim()) children.push(leaf("product.tags", "contains", params.tag.trim()));
+  if (vendor) children.push(leaf("product.vendor", "contains", vendor));
+  if (productType) children.push(leaf("product.productType", "contains", productType));
+  if (tag) children.push(leaf("product.tags", "contains", tag));
   if (params.hasImages === "YES") children.push(leaf("product.hasImages", "eq", true));
   if (params.hasImages === "NO") children.push(leaf("product.hasImages", "eq", false));
   if (params.minTotalInventory.trim()) {
@@ -66,14 +71,27 @@ function buildFilterExprFromUi(params: {
   return andGroup(children);
 }
 
+// Determine if the filter expression requires SNAPSHOT execution mode
+function requiresSnapshot(filterExpr: FilterExpr | null): boolean {
+  if (!filterExpr) return false;
+  if (filterExpr.type === "leaf") {
+    const def: FilterDefinition = FILTER_REGISTRY[filterExpr.filterId];
+    return def.plane === "SNAPSHOT";
+  }
+  if (filterExpr.type === "and") {
+    return filterExpr.children.some(requiresSnapshot);
+  }
+  return false;
+}
+
 // Hook for plan evaluation
-function usePlanFilter(app: AppBridgeState | undefined, filterExpr: FilterExpr | null) {
+function usePlanFilter(app: AppBridgeState | undefined, filterExpr: FilterExpr | null, executionMode: FilterExecutionMode) {
   return useQuery({
-    queryKey: ["planFilter", filterExpr],
+    queryKey: ["planFilter", filterExpr, executionMode],
     enabled: !!app,
     queryFn: () => {
       if (!app) throw new Error("AppBridge not ready");
-      return planFilterRequest(app, filterExpr);
+      return planFilterRequest(app, filterExpr, executionMode);
     },
   });
 }
@@ -115,14 +133,14 @@ export default function FilteredProductsPage() {
   const [minTotalInventory, setMinTotalInventory] = useState("");
 
   const [appliedFilterExpr, setAppliedFilterExpr] = useState<FilterExpr | null>(null);
+  const [executionMode, setExecutionMode] = useState<FilterExecutionMode>("FAST_ONLY");
 
   const uiFilterExpr = useMemo(() =>
     buildFilterExprFromUi({ status, vendor, productType, tag, hasImages, minTotalInventory }),
     [status, vendor, productType, tag, hasImages, minTotalInventory]
   );
 
-  const planQuery = usePlanFilter(app, appliedFilterExpr);
-  const executionMode = planQuery.data?.executionMode;
+  const planQuery = usePlanFilter(app, appliedFilterExpr, executionMode);
   const planHash = planQuery.data?.planHash;
   const filterSummary = planQuery.data?.filterSummary;
 
@@ -140,7 +158,11 @@ export default function FilteredProductsPage() {
   const loadingProducts = productsQuery.isLoading;
   const showSnapshotBanner = executionMode === "SNAPSHOT" && planHash && !loadingProducts;
 
-  const handleApplyFilters = () => setAppliedFilterExpr(uiFilterExpr);
+  const handleApplyFilters = () => {
+    const mode = requiresSnapshot(uiFilterExpr) ? "SNAPSHOT" : "FAST_ONLY";
+    setExecutionMode(mode);
+    setAppliedFilterExpr(uiFilterExpr);
+  };
 
   return (
     <Page title="Products (FAST filters)" primaryAction={{ content: "Apply filters", onAction: handleApplyFilters, loading: applying }}>

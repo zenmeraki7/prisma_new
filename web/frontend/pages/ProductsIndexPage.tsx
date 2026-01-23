@@ -334,16 +334,21 @@ function buildFilterExprFromUi(params: {
 }): FilterExpr | null {
   const children: FilterExpr[] = [];
 
+  // FAST plane expects exact string or boolean matches
   if (params.status !== "ALL") children.push(leaf("product.status", "eq", params.status.toUpperCase()));
-  if (params.vendor.trim()) children.push(leaf("product.vendor", "contains", params.vendor.trim()));
-  if (params.productType.trim()) children.push(leaf("product.productType", "contains", params.productType.trim()));
-  if (params.tag.trim()) children.push(leaf("product.tags", "contains", params.tag.trim()));
+
+  if (params.vendor.trim()) children.push(leaf("product.vendor", "eq", params.vendor.trim())); // changed contains -> eq
+  if (params.productType.trim()) children.push(leaf("product.productType", "eq", params.productType.trim())); // eq
+  if (params.tag.trim()) children.push(leaf("product.tags", "eq", params.tag.trim())); // eq
+
   if (params.hasImages === "YES") children.push(leaf("product.hasImages", "eq", true));
   if (params.hasImages === "NO") children.push(leaf("product.hasImages", "eq", false));
-  if (params.minTotalInventory.trim()) {
-    const parsed = Number(params.minTotalInventory);
-    if (!Number.isNaN(parsed)) children.push(leaf("product.totalInventory", "gte", parsed));
-  }
+
+  // Remove minTotalInventory for FAST_ONLY (optional)
+  // if (params.minTotalInventory.trim()) {
+  //   const parsed = Number(params.minTotalInventory);
+  //   if (!Number.isNaN(parsed)) children.push(leaf("product.totalInventory", "gte", parsed));
+  // }
 
   return andGroup(children);
 }

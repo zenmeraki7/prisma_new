@@ -39,8 +39,15 @@ async function testDbConnection() {
 // Shopify authentication + webhooks
 // ──────────────────────────────────────────────
 app.get(shopify.config.auth.path, shopify.auth.begin());
-app.get(shopify.config.auth.callbackPath, shopify.auth.callback(), shopify.redirectToShopifyOrAppRoot());
-app.post(shopify.config.webhooks.path, shopify.processWebhooks({ webhookHandlers: PrivacyWebhookHandlers }));
+app.get(
+  shopify.config.auth.callbackPath,
+  shopify.auth.callback(),
+  shopify.redirectToShopifyOrAppRoot()
+);
+app.post(
+  shopify.config.webhooks.path,
+  shopify.processWebhooks({ webhookHandlers: PrivacyWebhookHandlers })
+);
 
 // ──────────────────────────────────────────────
 // API auth middleware
@@ -53,14 +60,40 @@ app.use("/api/*", shopify.validateAuthenticatedSession());
 app.post("/api/graphql", async (req, res) => {
   try {
     const session = res.locals.shopify?.session;
-    if (!session) return res.status(401).json({ errors: [{ message: "Unauthenticated" }] });
+    if (!session) {
+      return res.status(401).json({ errors: [{ message: "Unauthenticated" }] });
+    }
 
     const { query, variables } = req.body || {};
-    if (!query || typeof query !== "string") return res.status(400).json({ errors: [{ message: "Missing GraphQL query" }] });
+    if (!query || typeof query !== "string") {
+      return res.status(400).json({ errors: [{ message: "Missing GraphQL query" }] });
+    }
 
     const client = new shopify.api.clients.Graphql({ session });
 
-    // ───── bootstrapProducts ─────
+    // ───────────────── planFilter ─────────────────
+    if (query.includes("planFilter")) {
+      const filter = variables?.filter || null;
+
+      const executionMode = "FAST_ONLY";
+      const planHash = filter
+        ? Buffer.from(JSON.stringify(filter)).toString("base64").slice(0, 16)
+        : "default";
+
+      const filterSummary = filter ? JSON.stringify(filter).slice(0, 120) : "No filter";
+
+      return res.json({
+        data: {
+          planFilter: {
+            executionMode,
+            planHash,
+            filterSummary,
+          },
+        },
+      });
+    }
+
+    // ───────────────── bootstrapProducts ─────────────────
     if (query.includes("bootstrapProducts")) {
       const first = Number(variables?.first ?? 25);
       const after = variables?.after ?? null;
@@ -89,9 +122,9 @@ app.post("/api/graphql", async (req, res) => {
           }
         }
       `;
+
       const response = await client.request(shopifyQuery, { variables: { first, after } });
       const edges = response?.data?.products?.edges || [];
-
       const items = edges.map((edge) => {
         const p = edge.node;
         return {
@@ -106,22 +139,29 @@ app.post("/api/graphql", async (req, res) => {
           updatedAtShopify: p.updatedAt,
         };
       });
-
       const nextCursor = edges.length > 0 ? edges[edges.length - 1].cursor : null;
 
       return res.json({
-        data: { bootstrapProducts: { status: { fastReady: true, syncEnqueued: false, fastLastSyncAt: new Date().toISOString(), fastRevision: 1 }, page: { items, nextCursor } } },
+        data: {
+          bootstrapProducts: {
+            status: {
+              fastReady: true,
+              syncEnqueued: false,
+              fastLastSyncAt: new Date().toISOString(),
+              fastRevision: 1,
+            },
+            page: { items, nextCursor },
+          },
+        },
       });
     }
 
-    // ───── productsByFilter (FAST-plane) ─────
+    // ───────────────── productsByFilter ─────────────────
     if (query.includes("productsByFilter")) {
       const first = Number(variables?.first ?? 50);
       const after = variables?.after ?? null;
       const filter = variables?.filter || {};
-      const mode = variables?.mode || "FAST_ONLY";
 
-      // Build Prisma where clause dynamically from filter
       const where = {};
       if (filter?.status) where.status = filter.status;
       if (filter?.vendor) where.vendor = { contains: filter.vendor };
@@ -130,7 +170,7 @@ app.post("/api/graphql", async (req, res) => {
       if (filter?.hasImages !== undefined) where.hasImages = filter.hasImages;
       if (filter?.minTotalInventory !== undefined) where.totalInventory = { gte: Number(filter.minTotalInventory) };
 
-      const items = await prisma.product_lite.findMany({
+      const items = await prisma.productLite.findMany({
         where,
         orderBy: { updatedAtShopify: "desc" },
         take: first,
@@ -139,19 +179,76 @@ app.post("/api/graphql", async (req, res) => {
 
       const nextCursor = items.length ? String((after ? parseInt(after, 10) : 0) + items.length) : null;
 
-      return res.json({ data: { productsByFilter: { items, nextCursor, mode } } });
+      return res.json({
+        data: {
+          productsByFilter: { items, nextCursor, mode: "FAST_ONLY" },
+        },
+      });
     }
 
-    // ───── unknown operation ─────
-    return res.status(400).json({ errors: [{ message: "Unsupported GraphQL operation" }] });
+    // ───────────────── snapshotRuns ─────────────────
+    if (query.includes("snapshotRuns")) {
+      const first = Number(variables?.first ?? 25);
+      const after = variables?.after ?? null;
+
+      const runs = await prisma.snapshotRun.findMany({
+        orderBy: { createdAt: "desc" },
+        take: first,
+        skip: after ? parseInt(after, 10) : 0,
+      });
+
+      const nextCursor = runs.length === first ? String((after ? parseInt(after, 10) : 0) + first) : null;
+
+      return res.json({
+        data: {
+          snapshotRuns: {
+            runs,
+            nextCursor,
+          },
+        },
+      });
+    }
+
+    // ───────────────── snapshotRunEvents ─────────────────
+    if (query.includes("snapshotRunEvents")) {
+      const runId = variables?.runId;
+      if (!runId) {
+        return res.status(400).json({ errors: [{ message: "runId is required" }] });
+      }
+
+      const first = Number(variables?.first ?? 50);
+      const after = variables?.after ?? null;
+
+      const events = await prisma.snapshotRunEvent.findMany({
+        where: { snapshotRunId: runId },
+        orderBy: { createdAt: "desc" },
+        take: first,
+        skip: after ? parseInt(after, 10) : 0,
+      });
+
+      const nextCursor = events.length === first ? String((after ? parseInt(after, 10) : 0) + first) : null;
+
+      return res.json({
+        data: {
+          snapshotRunEvents: { events, nextCursor },
+        },
+      });
+    }
+
+    // ───────────────── unknown operation ─────────────────
+    return res.status(400).json({
+      errors: [{ message: "Unsupported GraphQL operation" }],
+    });
   } catch (error) {
     console.error("❌ /api/graphql error:", error);
-    return res.status(500).json({ errors: [{ message: "GraphQL server error", details: error.message }] });
+    return res.status(500).json({
+      errors: [{ message: "GraphQL server error", details: error.message }],
+    });
   }
 });
 
 // ──────────────────────────────────────────────
-// Existing REST APIs
+// REST endpoints
 // ──────────────────────────────────────────────
 app.get("/api/products/count", async (_req, res) => {
   try {
@@ -183,7 +280,7 @@ app.post("/api/products", async (_req, res) => {
 app.use(shopify.cspHeaders());
 app.use(serveStatic(STATIC_PATH, { index: false }));
 
-// Catch-all — MUST be last
+// Catch-all
 app.use("/*", shopify.ensureInstalledOnShop(), async (_req, res) => {
   return res
     .status(200)

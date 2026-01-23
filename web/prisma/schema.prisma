@@ -1,5 +1,3 @@
-// prisma/schema.prisma
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -9,9 +7,9 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-/* ============
+/* =====================
    ENUMS
-   ============ */
+   ===================== */
 
 enum SnapshotState {
   PENDING
@@ -35,51 +33,50 @@ enum BulkJobState {
   CANCELLED
 }
 
-/* ============
+/* =====================
    CORE SHOP MODEL
-   ============ */
+   ===================== */
 
 model Shop {
-  id              String           @id @default(cuid())
-  shopDomain      String           @unique
-  accessToken     String
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
+  id                 String   @id @default(cuid())
+  shopDomain         String   @unique
+  accessToken        String
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   // FAST plane
-  productLites    ProductLite[]
-  fastSyncState   FastSyncState?
+  productLites       ProductLite[]
+  fastSyncState      FastSyncState?
 
   // SNAPSHOT plane
-  snapshotRuns    SnapshotRun[]
-  snapshotProducts SnapshotProduct[]
-  snapshotEvents  SnapshotRunEvent[]
+  snapshotRuns       SnapshotRun[]
+  snapshotProducts   SnapshotProduct[]
+  snapshotEvents     SnapshotRunEvent[]
 
   // Bulk jobs
-  bulkOpsJobs     BulkOpsJob[]
-  bulkOpsEvents   BulkOpsJobEvent[]
+  bulkOpsJobs         BulkOpsJob[]
+  bulkOpsEvents       BulkOpsJobEvent[]
 
   // Idempotency
-  idempotencyLedger IdempotencyLedger[]
+  idempotencyLedger  IdempotencyLedger[]
 }
 
-/* ============
+/* =====================
    FAST PLANE
-   ============ */
+   ===================== */
 
 model ProductLite {
-  /// Shopify product GID or numeric ID (as string). Scoped by shopId in PK.
   id                String
   shopId            String
   title             String
   handle            String
-  status            String        // "ACTIVE" | "DRAFT" | "ARCHIVED" etc.
+  status            String
   vendor            String?
   productType       String?
-  hasImages         Boolean       @default(false)
+  hasImages         Boolean   @default(false)
   updatedAtShopify  DateTime?
 
-  shop              Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  shop              Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
   tags              ProductTag[]
   collections       ProductCollection[]
   variantRollup     VariantRollup?
@@ -103,11 +100,11 @@ model ProductTag {
 }
 
 model ProductCollection {
-  shopId      String
-  productId   String
+  shopId       String
+  productId    String
   collectionId String
 
-  product     ProductLite @relation(fields: [shopId, productId], references: [shopId, id], onDelete: Cascade)
+  product      ProductLite @relation(fields: [shopId, productId], references: [shopId, id], onDelete: Cascade)
 
   @@id([shopId, productId, collectionId])
   @@index([shopId, collectionId])
@@ -136,14 +133,14 @@ model FastSyncState {
   shop           Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
 }
 
-/* ============
+/* =====================
    SNAPSHOT PLANE
-   ============ */
+   ===================== */
 
 model SnapshotRun {
   id            String        @id @default(cuid())
   shopId        String
-  planHash      String        // hash of filter DSL + registry version
+  planHash      String
   state         SnapshotState @default(PENDING)
   progress      Int           @default(0)
   total         Int           @default(0)
@@ -167,49 +164,49 @@ model SnapshotProduct {
   snapshotRunId String
   shopId        String
   productId     String
-  sortKey       DateTime?     // e.g. updatedAtShopify for deterministic ordering
+  sortKey       DateTime?
 
-  snapshotRun   SnapshotRun   @relation(fields: [snapshotRunId], references: [id], onDelete: Cascade)
-  shop          Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  snapshotRun   SnapshotRun @relation(fields: [snapshotRunId], references: [id], onDelete: Cascade)
+  shop          Shop        @relation(fields: [shopId], references: [id], onDelete: Cascade)
 
   @@id([snapshotRunId, productId])
   @@index([shopId, productId])
 }
 
 model SnapshotRunEvent {
-  id            String                @id @default(cuid())
+  id            String               @id @default(cuid())
   snapshotRunId String
   shopId        String
-  kind          SnapshotRunEventKind  @default(INFO)
+  kind          SnapshotRunEventKind @default(INFO)
   message       String?
-  createdAt     DateTime              @default(now())
+  createdAt     DateTime             @default(now())
 
-  snapshotRun   SnapshotRun           @relation(fields: [snapshotRunId], references: [id], onDelete: Cascade)
-  shop          Shop                  @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  snapshotRun   SnapshotRun @relation(fields: [snapshotRunId], references: [id], onDelete: Cascade)
+  shop          Shop        @relation(fields: [shopId], references: [id], onDelete: Cascade)
 
   @@index([snapshotRunId, createdAt])
   @@index([shopId, createdAt])
 }
 
-/* ============
+/* =====================
    BULK JOBS
-   ============ */
+   ===================== */
 
 model BulkOpsJob {
-  id            String        @id @default(cuid())
+  id            String       @id @default(cuid())
   shopId        String
-  scopeType     String        // e.g. "SNAPSHOT_RUN", "FILTER_EXPR", "EXPLICIT_IDS"
-  scopeRef      String        // e.g. snapshotRunId or planHash
-  actionKind    String        // e.g. "ADD_TAG", "SET_PRICE"
-  actionPayload Json          // serialized action, aligned with registry
-  state         BulkJobState  @default(PENDING)
-  total         Int           @default(0)
-  processed     Int           @default(0)
+  scopeType     String
+  scopeRef      String
+  actionKind    String
+  actionPayload Json
+  state         BulkJobState @default(PENDING)
+  total         Int          @default(0)
+  processed     Int          @default(0)
   errorMessage  String?
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
 
-  shop          Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  shop          Shop         @relation(fields: [shopId], references: [id], onDelete: Cascade)
   events        BulkOpsJobEvent[]
 
   @@index([shopId, createdAt])
@@ -220,7 +217,7 @@ model BulkOpsJobEvent {
   id        String     @id @default(cuid())
   jobId     String
   shopId    String
-  kind      String     // e.g. "INFO", "ERROR"
+  kind      String
   message   String?
   createdAt DateTime   @default(now())
 
@@ -231,15 +228,15 @@ model BulkOpsJobEvent {
   @@index([shopId, createdAt])
 }
 
-/* ============
+/* =====================
    IDEMPOTENCY
-   ============ */
+   ===================== */
 
 model IdempotencyLedger {
   id        String   @id @default(cuid())
   shopId    String
-  scope     String   // e.g. "BULK_JOB", "SNAPSHOT_RUN"
-  key       String   // something uniquely describing the operation
+  scope     String
+  key       String
   createdAt DateTime @default(now())
 
   shop      Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
