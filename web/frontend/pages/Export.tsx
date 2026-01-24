@@ -21,9 +21,7 @@ import {
 } from "@shopify/polaris";
 import {
   ExportIcon,
-  CheckCircleIcon,
-  AlertCircleIcon,
-  ClockIcon,
+
 } from "@shopify/polaris-icons";
 
 type ExportFormat = "csv" | "xlsx" | "json" | "xml";
@@ -173,7 +171,6 @@ export default function ExportPage() {
     <Page
       title="Export Products"
       subtitle="Configure and export your selected products"
-      fullWidth
       backAction={{ content: "Products", url: "/Products" }}
       primaryAction={{
         content: isExporting ? "Exporting..." : "Start Export",
@@ -265,136 +262,85 @@ export default function ExportPage() {
               </BlockStack>
             </Card>
 
-            {/* Field Selection */}
-            <Card>
-              <BlockStack gap="400">
-                <InlineStack align="space-between" blockAlign="center">
-                  <Text as="h2" variant="headingMd" fontWeight="semibold">
-                    Field Selection
-                  </Text>
-                  <Badge tone="info">{`${selectedFields.length} fields selected`}</Badge>
-                </InlineStack>
+            {/* Field Selection and Tips Row */}
+            <Layout>
+              <Layout.Section>
+                <Box paddingBlockEnd="400">
+                           <Card>
+  <BlockStack gap="300">
+    <InlineStack align="space-between" blockAlign="center">
+      <Text as="h2" variant="headingMd" fontWeight="semibold">
+        Field Selection
+      </Text>
+      <Badge tone="info">
+        {`${selectedFields.length} fields selected`}
+      </Badge>
+    </InlineStack>
 
-                <Divider />
+    <Divider />
 
-                <InlineStack gap="600" align="start">
-                  <Box minWidth="240px">
-                    <ChoiceList
-                      title="Select fields to export"
-                      titleHidden
-                      choices={leftFields}
-                      selected={selectedFields}
-                      onChange={setSelectedFields}
-                      allowMultiple
-                    />
-                  </Box>
+    <InlineStack gap="400" align="start">
+      <Box minWidth="220px">
+        <ChoiceList
+          title=""
+          titleHidden
+          choices={leftFields}
+          selected={selectedFields}
+          onChange={setSelectedFields}
+          allowMultiple
+        />
+      </Box>
 
-                  <Box minWidth="240px">
-                    <ChoiceList
-                      title={"Choice"}
-                      titleHidden
-                      choices={rightFields}
-                      selected={selectedFields}
-                      onChange={setSelectedFields}
-                      allowMultiple
-                    />
-                  </Box>
-                </InlineStack>
+      <Box minWidth="220px">
+        <ChoiceList
+        title=""
+          titleHidden
+          choices={rightFields}
+          selected={selectedFields}
+          onChange={setSelectedFields}
+          allowMultiple
+        />
+      </Box>
+    </InlineStack>
 
-                {selectedFields.length === 0 && (
-                  <Banner tone="warning">
-                    <Text as="p" variant="bodySm">
-                      Please select at least one field to export
-                    </Text>
-                  </Banner>
-                )}
-              </BlockStack>
-            </Card>
-          </BlockStack>
-        </Layout.Section>
+    {selectedFields.length === 0 && (
+      <Banner tone="warning">
+        <Text as="p" variant="bodySm">
+          Please select at least one field to export
+        </Text>
+      </Banner>
+    )}
+  </BlockStack>
+</Card>
+                </Box>
+         
 
-        {/* Sidebar - Preview & History */}
-        <Layout.Section variant="oneThird">
-          <BlockStack gap="400">
-            {/* Export Preview */}
-            <Card>
-              <BlockStack gap="300">
-                <Text as="h3" variant="headingSm" fontWeight="semibold">
-                  Export Preview
-                </Text>
-                <BlockStack gap="200">
-                  <InlineStack align="space-between">
-                    <Text as="p" variant="bodySm" tone="subdued">
-                      Format
-                    </Text>
-                    <Text as="p" variant="bodySm" fontWeight="medium">
-                      {format.toUpperCase()}
-                    </Text>
-                  </InlineStack>
-                  <InlineStack align="space-between">
-                    <Text as="p" variant="bodySm" tone="subdued">
-                      Products
-                    </Text>
-                    <Text as="p" variant="bodySm" fontWeight="medium">
-                      {selectedProducts.length}
-                    </Text>
-                  </InlineStack>
-                  <InlineStack align="space-between">
-                    <Text as="p" variant="bodySm" tone="subdued">
-                      Fields
-                    </Text>
-                    <Text as="p" variant="bodySm" fontWeight="medium">
-                      {selectedFields.length}
-                    </Text>
-                  </InlineStack>
-                  <InlineStack align="space-between">
-                    <Text as="p" variant="bodySm" tone="subdued">
-                      Est. size
-                    </Text>
-                    <Text as="p" variant="bodySm" fontWeight="medium">
-                      {(estimatedRecords * 0.002).toFixed(2)} MB
-                    </Text>
-                  </InlineStack>
-                </BlockStack>
-                {selectedProducts.length === 0 && (
-                  <>
-                    <Divider />
-                    <Banner tone="warning">
-                      <Text as="p" variant="bodySm">
-                        No products selected. Please select products from the
-                        Products page.
-                      </Text>
-                    </Banner>
-                  </>
-                )}
-              </BlockStack>
-            </Card>
+              </Layout.Section>
 
-            {/* Tips */}
-            <Card>
-              <BlockStack gap="300">
-                <Text as="h3" variant="headingSm" fontWeight="semibold">
-                  Export Tips
-                </Text>
-                <BlockStack gap="100">
-                  <Text as="p" variant="bodyXs" tone="subdued">
-                    • Select products from the Products page
-                  </Text>
-                  <Text as="p" variant="bodyXs" tone="subdued">
-                    • Remove products by clicking the trash icon
-                  </Text>
-                  <Text as="p" variant="bodyXs" tone="subdued">
-                    • CSV format works with Excel and Google Sheets
-                  </Text>
-                  <Text as="p" variant="bodyXs" tone="subdued">
-                    • XLSX preserves formatting and formulas
-                  </Text>
-                  <Text as="p" variant="bodyXs" tone="subdued">
-                    • Exports are available for 30 days
-                  </Text>
-                </BlockStack>
-              </BlockStack>
-            </Card>
+              <Layout.Section variant="oneThird">
+                <Card>
+                  <BlockStack gap="300">
+                    <Text as="h3" variant="headingMd" fontWeight="semibold">
+                      Export Tips
+                    </Text>
+                  <BlockStack gap="200">
+  {[
+    "Select products from the Products page",
+    "Remove products by clicking the trash icon",
+    "CSV format works with Excel and Google Sheets",
+    "XLSX preserves formatting and formulas",
+    "Exports are available for 30 days",
+  ].map((tip) => (
+    <Text key={tip} as="p" variant="bodyMd" tone="subdued">
+      • {tip}
+    </Text>
+  ))}
+</BlockStack>
+
+                  </BlockStack>
+                </Card>
+              </Layout.Section>
+            </Layout>
           </BlockStack>
         </Layout.Section>
       </Layout>
