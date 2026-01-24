@@ -1,4 +1,4 @@
-// /pages/FilteredProductsPage.tsx
+// web/frontend/pages/FilteredProductsPage.tsx
 import React, { useMemo, useState } from "react";
 import {
   Page,
@@ -35,42 +35,80 @@ import {
   type ProductLiteDto,
 } from "../queries/productsByFilter";
 
-// Helper to build a filter leaf when value is present
-function leafIf(cond: boolean, filterId: FilterId, op: any, value: unknown): FilterExpr | null {
+// Small helper to build a filter leaf when value is present
+function leafIf(
+  cond: boolean,
+  filterId: FilterId,
+  op: any,
+  value: unknown
+): FilterExpr | null {
   if (!cond) return null;
   return leaf(filterId, op, value);
 }
 
-// Build FilterExpr from UI state
+/**
+ * Build a FilterExpr from the UI state.
+ * All filters here are FAST-plane: status, vendor, productType, tags, hasImages, minTotalInventory.
+ */
 function buildFilterExprFromUi(params: {
   status: string;
   vendor: string;
   productType: string;
   tag: string;
-  hasImages: string;
+  hasImages: string; // "ANY" | "YES" | "NO"
   minTotalInventory: string;
 }): FilterExpr | null {
   const children: FilterExpr[] = [];
 
-  if (params.status !== "ALL") children.push(leaf("product.status", "eq", params.status.toUpperCase()));
-  if (params.vendor.trim()) children.push(leaf("product.vendor", "contains", params.vendor.trim()));
-  if (params.productType.trim()) children.push(leaf("product.productType", "contains", params.productType.trim()));
-  if (params.tag.trim()) children.push(leaf("product.tags", "contains", params.tag.trim()));
-  if (params.hasImages === "YES") children.push(leaf("product.hasImages", "eq", true));
-  if (params.hasImages === "NO") children.push(leaf("product.hasImages", "eq", false));
+  if (params.status !== "ALL") {
+    children.push(
+      leaf("product.status", "eq", params.status.toUpperCase())
+    );
+  }
+
+  if (params.vendor.trim()) {
+    children.push(
+      leaf("product.vendor", "contains", params.vendor.trim())
+    );
+  }
+
+  if (params.productType.trim()) {
+    children.push(
+      leaf("product.productType", "contains", params.productType.trim())
+    );
+  }
+
+  if (params.tag.trim()) {
+    children.push(
+      leaf("product.tags", "contains", params.tag.trim())
+    );
+  }
+
+  if (params.hasImages === "YES") {
+    children.push(leaf("product.hasImages", "eq", true));
+  } else if (params.hasImages === "NO") {
+    children.push(leaf("product.hasImages", "eq", false));
+  }
+
   if (params.minTotalInventory.trim()) {
     const parsed = Number(params.minTotalInventory);
-    if (!Number.isNaN(parsed)) children.push(leaf("product.totalInventory", "gte", parsed));
+    if (!Number.isNaN(parsed)) {
+      children.push(
+        leaf("product.totalInventory", "gte", parsed)
+      );
+    }
   }
 
   return andGroup(children);
 }
 
-// Hook for plan evaluation
+/**
+ * Plan hook – wraps planFilterRequest in react-query.
+ */
 function usePlanFilter(app: AppBridgeState | undefined, filterExpr: FilterExpr | null) {
   return useQuery({
     queryKey: ["planFilter", filterExpr],
-    enabled: !!app,
+    enabled: !!app, // and we can allow empty filter (match all)
     queryFn: () => {
       if (!app) throw new Error("AppBridge not ready");
       return planFilterRequest(app, filterExpr);
@@ -78,7 +116,9 @@ function usePlanFilter(app: AppBridgeState | undefined, filterExpr: FilterExpr |
   });
 }
 
-// Hook for fetching products with infinite scroll
+/**
+ * Products hook – wraps productsByFilter with infinite scroll.
+ */
 function useProductsByFilter(params: {
   app: AppBridgeState | undefined;
   filterExpr: FilterExpr | null;
@@ -87,11 +127,16 @@ function useProductsByFilter(params: {
 }) {
   const { app, filterExpr, executionMode, planHash } = params;
 
+  const enabled =
+    !!app && !!executionMode && !!filterExpr; // allow FAST_ONLY and SNAPSHOT
+
   return useInfiniteQuery({
     queryKey: ["productsByFilter", planHash, executionMode],
-    enabled: !!app && !!executionMode && !!filterExpr,
+    enabled,
     queryFn: async ({ pageParam }) => {
-      if (!app || !executionMode) throw new Error("AppBridge or executionMode not ready");
+      if (!app || !executionMode) {
+        throw new Error("AppBridge or executionMode not ready");
+      }
       return productsByFilterRequest(app, {
         filter: filterExpr,
         mode: executionMode,
@@ -99,14 +144,15 @@ function useProductsByFilter(params: {
         after: pageParam ?? null,
       });
     },
-    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    getNextPageParam: (lastPage) =>
+      lastPage.nextCursor ? lastPage.nextCursor : undefined,
   });
 }
 
 export default function FilteredProductsPage() {
   const app = useAppBridge();
 
-  // UI filter state
+  // UI state for FAST filters
   const [status, setStatus] = useState<string>("ALL");
   const [vendor, setVendor] = useState("");
   const [productType, setProductType] = useState("");
@@ -114,70 +160,168 @@ export default function FilteredProductsPage() {
   const [hasImages, setHasImages] = useState<string>("ANY");
   const [minTotalInventory, setMinTotalInventory] = useState("");
 
-  const [appliedFilterExpr, setAppliedFilterExpr] = useState<FilterExpr | null>(null);
+  const [appliedFilterExpr, setAppliedFilterExpr] =
+    useState<FilterExpr | null>(null);
 
-  const uiFilterExpr = useMemo(() =>
-    buildFilterExprFromUi({ status, vendor, productType, tag, hasImages, minTotalInventory }),
+  const uiFilterExpr = useMemo(
+    () =>
+      buildFilterExprFromUi({
+        status,
+        vendor,
+        productType,
+        tag,
+        hasImages,
+        minTotalInventory,
+      }),
     [status, vendor, productType, tag, hasImages, minTotalInventory]
   );
 
+  // Plan for the *applied* filter
   const planQuery = usePlanFilter(app, appliedFilterExpr);
   const executionMode = planQuery.data?.executionMode;
   const planHash = planQuery.data?.planHash;
   const filterSummary = planQuery.data?.filterSummary;
 
-  const productsQuery = useProductsByFilter({ app, filterExpr: appliedFilterExpr, executionMode, planHash });
+  // Products for that plan
+  const productsQuery = useProductsByFilter({
+    app,
+    filterExpr: appliedFilterExpr,
+    executionMode,
+    planHash,
+  });
 
   const allItems: ProductLiteDto[] = useMemo(() => {
     if (!productsQuery.data) return [];
     return productsQuery.data.pages.flatMap((p) => p.items);
   }, [productsQuery.data]);
 
-  const resourceName = { singular: "product", plural: "products" };
-  const { selectedResources, allResourcesSelected, handleSelectionChange } = useIndexResourceState(allItems, { resourceIDResolver: (product) => product.id });
+  const resourceName = {
+    singular: "product",
+    plural: "products",
+  };
+
+  const {
+    selectedResources,
+    allResourcesSelected,
+    handleSelectionChange,
+  } = useIndexResourceState(allItems, {
+    resourceIDResolver: (product) => product.id,
+  });
 
   const applying = planQuery.isLoading;
   const loadingProducts = productsQuery.isLoading;
-  const showSnapshotBanner = executionMode === "SNAPSHOT" && planHash && !loadingProducts;
 
-  const handleApplyFilters = () => setAppliedFilterExpr(uiFilterExpr);
+  const showSnapshotBanner =
+    executionMode === "SNAPSHOT" && planHash && !loadingProducts;
+
+  const handleApplyFilters = () => {
+    setAppliedFilterExpr(uiFilterExpr);
+  };
 
   return (
-    <Page title="Products (FAST filters)" primaryAction={{ content: "Apply filters", onAction: handleApplyFilters, loading: applying }}>
+    <Page
+      title="Products (FAST filters)"
+      primaryAction={{
+        content: "Apply filters",
+        onAction: handleApplyFilters,
+        loading: applying,
+      }}
+    >
       <Layout>
-        {/* Filter Controls */}
         <Layout.Section>
           <Card>
             <Box padding="400">
               <InlineStack align="space-between" gap="300" blockAlign="center">
                 <InlineStack gap="200">
-                  <Select label="Status" labelHidden options={[{ label: "All", value: "ALL" }, { label: "Active", value: "ACTIVE" }, { label: "Draft", value: "DRAFT" }, { label: "Archived", value: "ARCHIVED" }]} value={status} onChange={setStatus} />
-                  <Select label="Images" labelHidden options={[{ label: "Any", value: "ANY" }, { label: "Has images", value: "YES" }, { label: "No images", value: "NO" }]} value={hasImages} onChange={setHasImages} />
-                  <TextField label="Vendor" labelHidden placeholder="Vendor" value={vendor} onChange={setVendor} />
-                  <TextField label="Product type" labelHidden placeholder="Product type" value={productType} onChange={setProductType} />
-                  <TextField label="Tag" labelHidden placeholder="Tag contains…" value={tag} onChange={setTag} />
-                  <TextField label="Min total inventory" labelHidden type="number" placeholder="Min inventory" value={minTotalInventory} onChange={setMinTotalInventory} />
+                  <Select
+                    label="Status"
+                    labelHidden
+                    options={[
+                      { label: "All", value: "ALL" },
+                      { label: "Active", value: "ACTIVE" },
+                      { label: "Draft", value: "DRAFT" },
+                      { label: "Archived", value: "ARCHIVED" },
+                    ]}
+                    value={status}
+                    onChange={setStatus}
+                  />
+                  <Select
+                    label="Images"
+                    labelHidden
+                    options={[
+                      { label: "Any", value: "ANY" },
+                      { label: "Has images", value: "YES" },
+                      { label: "No images", value: "NO" },
+                    ]}
+                    value={hasImages}
+                    onChange={setHasImages}
+                  />
+                  <TextField
+                    label="Vendor"
+                    labelHidden
+                    placeholder="Vendor"
+                    value={vendor}
+                    onChange={setVendor}
+                  />
+                  <TextField
+                    label="Product type"
+                    labelHidden
+                    placeholder="Product type"
+                    value={productType}
+                    onChange={setProductType}
+                  />
+                  <TextField
+                    label="Tag"
+                    labelHidden
+                    placeholder="Tag contains…"
+                    value={tag}
+                    onChange={setTag}
+                  />
+                  <TextField
+                    label="Min total inventory"
+                    labelHidden
+                    type="number"
+                    placeholder="Min inventory"
+                    value={minTotalInventory}
+                    onChange={setMinTotalInventory}
+                  />
                 </InlineStack>
                 <InlineStack gap="200">
-                  <Button onClick={handleApplyFilters} loading={applying} primary>Apply</Button>
+                  <Button
+                    onClick={handleApplyFilters}
+                    loading={applying}
+                    primary
+                  >
+                    Apply
+                  </Button>
                   {productsQuery.hasNextPage && (
-                    <Button onClick={() => productsQuery.fetchNextPage()} loading={productsQuery.isFetchingNextPage} disabled={productsQuery.isFetchingNextPage}>
+                    <Button
+                      onClick={() => productsQuery.fetchNextPage()}
+                      loading={productsQuery.isFetchingNextPage}
+                      disabled={productsQuery.isFetchingNextPage}
+                    >
                       Load more
                     </Button>
                   )}
                 </InlineStack>
               </InlineStack>
-
               {filterSummary && (
                 <Box paddingBlockStart="200">
-                  <Text as="p" variant="bodySm" tone="subdued">Plan: {executionMode ?? "—"} · {filterSummary}</Text>
+                  <Text as="p" variant="bodySm" tone="subdued">
+                    Plan: {executionMode ?? "—"} · {filterSummary}
+                  </Text>
                 </Box>
               )}
-
               {showSnapshotBanner && (
                 <Box paddingBlockStart="200">
                   <Banner tone="info">
-                    <p>This filter requires SNAPSHOT mode (planHash <code>{planHash}</code>). Backend evaluates via BulkOperations; large sets use productsBySnapshot + snapshotStatus.</p>
+                    <p>
+                      This filter requires SNAPSHOT mode (planHash{" "}
+                      <code>{planHash}</code>). The backend will evaluate it
+                      via BulkOperations and materialize the result; you can
+                      later switch this page to use <code>productsBySnapshot</code>{" "}
+                      + <code>snapshotStatus</code> for large sets.
+                    </p>
                   </Banner>
                 </Box>
               )}
@@ -185,24 +329,31 @@ export default function FilteredProductsPage() {
           </Card>
         </Layout.Section>
 
-        {/* Products Table */}
         <Layout.Section>
           <Card>
             <Box padding="400">
               {loadingProducts && (
                 <InlineStack align="center" blockAlign="center" gap="200">
                   <Spinner />
-                  <Text as="p" variant="bodyMd">Loading products…</Text>
+                  <Text as="p" variant="bodyMd">
+                    Loading products…
+                  </Text>
                 </InlineStack>
               )}
-              {!loadingProducts && allItems.length === 0 && <Text as="p" variant="bodyMd">No products match the current filter.</Text>}
+              {!loadingProducts && allItems.length === 0 && (
+                <Text as="p" variant="bodyMd">
+                  No products match the current filter.
+                </Text>
+              )}
             </Box>
 
             {!loadingProducts && allItems.length > 0 && (
               <IndexTable
                 resourceName={resourceName}
                 itemCount={allItems.length}
-                selectedItemsCount={allResourcesSelected ? "All" : selectedResources.length}
+                selectedItemsCount={
+                  allResourcesSelected ? "All" : selectedResources.length
+                }
                 onSelectionChange={handleSelectionChange}
                 headings={[
                   { title: "Title" },
@@ -215,17 +366,56 @@ export default function FilteredProductsPage() {
                 ]}
               >
                 {allItems.map((product, index) => (
-                  <IndexTable.Row id={product.id} key={product.id} position={index} selected={selectedResources.includes(product.id)}>
+                  <IndexTable.Row
+                    id={product.id}
+                    key={product.id}
+                    position={index}
+                    selected={selectedResources.includes(product.id)}
+                  >
                     <IndexTable.Cell>
-                      <Text as="span" fontWeight="semibold">{product.title}</Text>
-                      <Text as="div" variant="bodySm" tone="subdued">{product.handle}</Text>
+                      <Text as="span" fontWeight="semibold">
+                        {product.title}
+                      </Text>
+                      <Text as="div" variant="bodySm" tone="subdued">
+                        {product.handle}
+                      </Text>
                     </IndexTable.Cell>
-                    <IndexTable.Cell><Badge tone={product.status === "ACTIVE" ? "success" : "subdued"}>{product.status}</Badge></IndexTable.Cell>
-                    <IndexTable.Cell><Text as="span">{product.vendor || "—"}</Text></IndexTable.Cell>
-                    <IndexTable.Cell><Text as="span">{product.productType || "—"}</Text></IndexTable.Cell>
-                    <IndexTable.Cell><Text as="span">{product.tags.length ? product.tags.join(", ") : "—"}</Text></IndexTable.Cell>
-                    <IndexTable.Cell>{product.hasImages ? <Badge tone="success">Yes</Badge> : <Badge tone="critical">No</Badge>}</IndexTable.Cell>
-                    <IndexTable.Cell><Text as="span" variant="bodySm" tone="subdued">{product.updatedAtShopify ? new Date(product.updatedAtShopify).toLocaleString() : "—"}</Text></IndexTable.Cell>
+                    <IndexTable.Cell>
+                      <Badge
+                        tone={
+                          product.status === "ACTIVE" ? "success" : "subdued"
+                        }
+                      >
+                        {product.status}
+                      </Badge>
+                    </IndexTable.Cell>
+                    <IndexTable.Cell>
+                      <Text as="span">{product.vendor || "—"}</Text>
+                    </IndexTable.Cell>
+                    <IndexTable.Cell>
+                      <Text as="span">{product.productType || "—"}</Text>
+                    </IndexTable.Cell>
+                    <IndexTable.Cell>
+                      <Text as="span">
+                        {product.tags.length ? product.tags.join(", ") : "—"}
+                      </Text>
+                    </IndexTable.Cell>
+                    <IndexTable.Cell>
+                      {product.hasImages ? (
+                        <Badge tone="success">Yes</Badge>
+                      ) : (
+                        <Badge tone="critical">No</Badge>
+                      )}
+                    </IndexTable.Cell>
+                    <IndexTable.Cell>
+                      <Text as="span" variant="bodySm" tone="subdued">
+                        {product.updatedAtShopify
+                          ? new Date(
+                              product.updatedAtShopify
+                            ).toLocaleString()
+                          : "—"}
+                      </Text>
+                    </IndexTable.Cell>
                   </IndexTable.Row>
                 ))}
               </IndexTable>
