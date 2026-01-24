@@ -1,120 +1,101 @@
 // web/graphql/filtering/planFilterResolver.ts
+import type { FilterExpr } from "../../lib/filters/dsl.js";
+import {
+  FILTER_REGISTRY,
+  type FilterRegistry,
+  type FilterDefinition,
+} from "../../lib/filters/registry.js";
+import { astFromJson } from "../../lib/filters/astFromJson.js";
 
-import crypto from "crypto";
-import type { FilterExpr, FilterLeafExpr } from "../../lib/filters/dsl.js";
-import { FILTER_REGISTRY, getFilterDef, type FilterRegistry } from "../../lib/filters/registry.js";
-
-type FilterExecutionMode = "FAST_ONLY" | "SNAPSHOT";
+export type FilterExecutionMode = "FAST_ONLY" | "SNAPSHOT";
 
 type PlanFilterArgs = {
   input: {
-    filter: any; // JSON from GraphQL
+    filter: unknown; // JSON from client
   };
 };
 
-type GraphQLContext = {
+// Context shape (matches GraphQLContext in schema.ts for what we use here)
+type Context = {
   shopId: string;
 };
-
-// Bump this if you change registry semantics in a breaking way.
-const REGISTRY_VERSION = "v1";
 
 export async function planFilterResolver(
   _parent: unknown,
   args: PlanFilterArgs,
-  _ctx: GraphQLContext
+  _ctx: Context,
 ) {
-  const raw = args.input?.filter;
-  if (!raw || typeof raw !== "object") {
-    throw new Error("planFilter: input.filter must be a non-null JSON object.");
-  }
+  // Parse JSON → FilterExpr
+  const expr: FilterExpr | null = astFromJson(args.input.filter);
 
-  const expr = raw as FilterExpr;
+  // Decide FAST vs SNAPSHOT based on registry
+  const executionMode: FilterExecutionMode =
+    expr && expressionUsesSnapshot(expr, FILTER_REGISTRY)
+      ? "SNAPSHOT"
+      : "FAST_ONLY";
 
-  // Validate against registry + detect planes
-  const { mode, filterSummary } = analyzeFilter(expr, FILTER_REGISTRY);
+  // Compute deterministic hash of the AST (non-crypto)
+  const planHash = expr ? computePlanHash(expr) : "default";
 
-  const planHash = computePlanHash(expr, mode, REGISTRY_VERSION);
+  // Produce a human-readable summary
+  const filterSummary = expr
+    ? summarizeFilter(expr, FILTER_REGISTRY)
+    : "No filter";
 
   return {
     planHash,
-    executionMode: mode,
+    executionMode,
     filterSummary,
   };
 }
 
-/* =======================================================================
- * ANALYSIS
- * ==================================================================== */
+/* ---------------- internal helpers ---------------- */
 
-function analyzeFilter(expr: FilterExpr, registry: FilterRegistry): {
-  mode: FilterExecutionMode;
-  filterSummary: string;
-} {
-  const leafPlanes: ("FAST" | "SNAPSHOT")[] = [];
-  const parts: string[] = [];
+function expressionUsesSnapshot(
+  expr: FilterExpr,
+  registry: FilterRegistry,
+): boolean {
+  if (expr.type === "group") {
+    return expr.children.some((child) =>
+      expressionUsesSnapshot(child, registry),
+    );
+  }
 
-  traverse(expr, (leaf) => {
-    const def = getFilterDef(leaf.filterId);
-    leafPlanes.push(def.plane);
-    parts.push(renderLeaf(def.label, leaf));
-  });
-
-  const hasSnapshot = leafPlanes.some((p) => p === "SNAPSHOT");
-  const mode: FilterExecutionMode = hasSnapshot ? "SNAPSHOT" : "FAST_ONLY";
-
-  const filterSummary =
-    parts.length === 0 ? "No filter (match all products)" : parts.join(" ∧ ");
-
-  return { mode, filterSummary };
+  const def: FilterDefinition | undefined = registry[expr.filterId];
+  if (!def) return false;
+  return def.plane === "SNAPSHOT";
 }
 
-function traverse(expr: FilterExpr, visitLeaf: (leaf: FilterLeafExpr) => void) {
-  if (expr.type === "leaf") {
-    visitLeaf(expr);
+function computePlanHash(expr: FilterExpr): string {
+  const json = JSON.stringify(expr);
+  let hash = 0;
+  for (let i = 0; i < json.length; i++) {
+    hash = (hash * 31 + json.charCodeAt(i)) | 0;
+  }
+  // Unsigned and hex
+  return `p_${(hash >>> 0).toString(16)}`;
+}
+
+function summarizeFilter(
+  expr: FilterExpr,
+  registry: FilterRegistry,
+): string {
+  const parts: string[] = [];
+  collectSummary(expr, registry, parts);
+  return parts.length ? parts.join(" · ") : "No filter";
+}
+
+function collectSummary(
+  expr: FilterExpr,
+  registry: FilterRegistry,
+  parts: string[],
+): void {
+  if (expr.type === "group") {
+    expr.children.forEach((c) => collectSummary(c, registry, parts));
     return;
   }
-  if (!expr.children || expr.children.length === 0) return;
-  for (const child of expr.children) {
-    traverse(child as FilterExpr, visitLeaf);
-  }
-}
 
-function renderLeaf(label: string, leaf: FilterLeafExpr): string {
-  const op = leaf.op;
-  const v = leaf.value;
-
-  if (op === "is_set") return `${label} is set`;
-  if (op === "is_not_set") return `${label} is not set`;
-
-  const vStr =
-    v === undefined || v === null
-      ? "null"
-      : Array.isArray(v)
-      ? JSON.stringify(v)
-      : typeof v === "object"
-      ? JSON.stringify(v)
-      : String(v);
-
-  return `${label} ${op} ${vStr}`;
-}
-
-/* =======================================================================
- * PLAN HASH
- * ==================================================================== */
-
-function computePlanHash(
-  expr: FilterExpr,
-  mode: FilterExecutionMode,
-  registryVersion: string
-): string {
-  const payload = JSON.stringify({
-    registryVersion,
-    mode,
-    filter: expr,
-  });
-
-  const hash = crypto.createHash("sha256");
-  hash.update(payload);
-  return hash.digest("hex");
+  const def = registry[expr.filterId];
+  const label = def?.label ?? expr.filterId;
+  parts.push(label);
 }

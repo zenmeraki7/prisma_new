@@ -70,6 +70,7 @@ app.post("/api/graphql", async (req, res) => {
     }
 
     const client = new shopify.api.clients.Graphql({ session });
+    const shopId = session.shop; // Use shop domain as shopId
 
     // ───────────────── planFilter ─────────────────
     if (query.includes("planFilter")) {
@@ -156,34 +157,281 @@ app.post("/api/graphql", async (req, res) => {
       });
     }
 
+    // ───────────────── syncProductsToDb ─────────────────
+    if (query.includes("syncProductsToDb")) {
+      try {
+        const first = Number(variables?.first ?? 50);
+        const after = variables?.after ?? null;
+
+        console.log(`🔄 Syncing products: first=${first}, after=${after}, shopId=${shopId}`);
+
+        // Ensure Shop record exists first
+        await prisma.shop.upsert({
+          where: { shopDomain: shopId },
+          update: {
+            accessToken: session.accessToken,
+            updatedAt: new Date(),
+          },
+          create: {
+            shopDomain: shopId,
+            accessToken: session.accessToken,
+          },
+        });
+
+        console.log(`✅ Shop record ensured for ${shopId}`);
+
+        const shopifyQuery = `
+          query SyncProducts($first: Int!, $after: String) {
+            products(first: $first, after: $after) {
+              edges {
+                cursor
+                node {
+                  id
+                  title
+                  handle
+                  status
+                  vendor
+                  productType
+                  tags
+                  updatedAt
+                  images(first: 1) {
+                    edges {
+                      node { id }
+                    }
+                  }
+                }
+              }
+              pageInfo {
+                hasNextPage
+              }
+            }
+          }
+        `;
+
+        const response = await client.request(shopifyQuery, { variables: { first, after } });
+        const edges = response?.data?.products?.edges || [];
+        
+        console.log(`📦 Fetched ${edges.length} products from Shopify`);
+        
+        // Get the Shop record ID to use as foreign key
+        const shop = await prisma.shop.findUnique({
+          where: { shopDomain: shopId },
+        });
+        
+        if (!shop) {
+          throw new Error("Shop record not found after upsert");
+        }
+        
+        console.log(`🔑 Using shop.id=${shop.id} for foreign key`);
+        
+        // Save to database
+        for (const edge of edges) {
+          const p = edge.node;
+          
+          try {
+            // Upsert ProductLite using shop.id as foreign key
+            await prisma.productLite.upsert({
+              where: {
+                shopId_id: {
+                  shopId: shop.id,
+                  id: p.id
+                }
+              },
+              update: {
+                title: p.title,
+                handle: p.handle,
+                status: p.status,
+                vendor: p.vendor || null,
+                productType: p.productType || null,
+                hasImages: (p.images?.edges?.length || 0) > 0,
+                updatedAtShopify: p.updatedAt ? new Date(p.updatedAt) : null,
+              },
+              create: {
+                shopId: shop.id,
+                id: p.id,
+                title: p.title,
+                handle: p.handle,
+                status: p.status,
+                vendor: p.vendor || null,
+                productType: p.productType || null,
+                hasImages: (p.images?.edges?.length || 0) > 0,
+                updatedAtShopify: p.updatedAt ? new Date(p.updatedAt) : null,
+              }
+            });
+            
+            // Handle tags - delete existing and recreate
+            if (p.tags && p.tags.length > 0) {
+              await prisma.productTag.deleteMany({
+                where: { shopId: shop.id, productId: p.id }
+              });
+              
+              await prisma.productTag.createMany({
+                data: p.tags.map(tag => ({
+                  shopId: shop.id,
+                  productId: p.id,
+                  tag
+                })),
+                skipDuplicates: true
+              });
+            } else {
+              // Remove all tags if product has none
+              await prisma.productTag.deleteMany({
+                where: { shopId: shop.id, productId: p.id }
+              });
+            }
+          } catch (productError) {
+            console.error(`❌ Error syncing product ${p.id}:`, productError);
+            throw productError;
+          }
+        }
+
+        console.log(`✅ Successfully synced ${edges.length} products to database`);
+
+        const hasNextPage = response?.data?.products?.pageInfo?.hasNextPage || false;
+        const nextCursor = hasNextPage && edges.length > 0 
+          ? edges[edges.length - 1].cursor 
+          : null;
+
+        return res.json({
+          data: {
+            syncProductsToDb: {
+              synced: edges.length,
+              nextCursor,
+              hasNextPage
+            }
+          }
+        });
+      } catch (syncError) {
+        console.error("❌ Sync error details:", syncError);
+        return res.status(500).json({
+          errors: [{ 
+            message: "Sync failed", 
+            details: syncError.message,
+            stack: process.env.NODE_ENV === 'development' ? syncError.stack : undefined
+          }],
+        });
+      }
+    }
+
     // ───────────────── productsByFilter ─────────────────
     if (query.includes("productsByFilter")) {
-      const first = Number(variables?.first ?? 50);
-      const after = variables?.after ?? null;
-      const filter = variables?.filter || {};
+      try {
+        const input = variables?.input || {};
+        const first = Number(input.first ?? 50);
+        const after = input.after ?? null;
+        const filterExpr = input.filter || null;
 
-      const where = {};
-      if (filter?.status) where.status = filter.status;
-      if (filter?.vendor) where.vendor = { contains: filter.vendor };
-      if (filter?.productType) where.productType = { contains: filter.productType };
-      if (filter?.tags?.length) where.tags = { hasEvery: filter.tags };
-      if (filter?.hasImages !== undefined) where.hasImages = filter.hasImages;
-      if (filter?.minTotalInventory !== undefined) where.totalInventory = { gte: Number(filter.minTotalInventory) };
+        console.log(`🔍 productsByFilter called:`, {
+          first,
+          after,
+          filterExpr: JSON.stringify(filterExpr, null, 2)
+        });
 
-      const items = await prisma.productLite.findMany({
-        where,
-        orderBy: { updatedAtShopify: "desc" },
-        take: first,
-        skip: after ? parseInt(after, 10) : 0,
-      });
+        // Get the Shop record to use correct ID
+        const shop = await prisma.shop.findUnique({
+          where: { shopDomain: shopId },
+        });
 
-      const nextCursor = items.length ? String((after ? parseInt(after, 10) : 0) + items.length) : null;
+        if (!shop) {
+          console.log(`❌ Shop not found for domain: ${shopId}`);
+          return res.json({
+            data: {
+              productsByFilter: { 
+                items: [], 
+                nextCursor: null, 
+                mode: "FAST_ONLY" 
+              },
+            },
+          });
+        }
 
-      return res.json({
-        data: {
-          productsByFilter: { items, nextCursor, mode: "FAST_ONLY" },
-        },
-      });
+        console.log(`✅ Found shop: ${shop.id}`);
+
+        // Build Prisma where clause from FilterExpr
+        const where = { shopId: shop.id };
+        
+        if (filterExpr && filterExpr.type === "group" && filterExpr.children) {
+          console.log(`📋 Processing ${filterExpr.children.length} filter children`);
+          
+          // Process each filter leaf in the children array
+          for (const child of filterExpr.children) {
+            if (child.type === "leaf") {
+              const { filterId, op, value } = child;
+              
+              console.log(`  - Filter: ${filterId} ${op} ${JSON.stringify(value)}`);
+              
+              if (filterId === "product.status" && op === "eq") {
+                where.status = String(value).toUpperCase();
+              } else if (filterId === "product.vendor" && op === "contains") {
+                where.vendor = { contains: String(value), mode: 'insensitive' };
+              } else if (filterId === "product.productType" && op === "contains") {
+                where.productType = { contains: String(value), mode: 'insensitive' };
+              } else if (filterId === "product.tags" && op === "contains") {
+                where.tags = {
+                  some: {
+                    tag: { contains: String(value), mode: 'insensitive' }
+                  }
+                };
+              } else if (filterId === "product.hasImages" && op === "eq") {
+                where.hasImages = Boolean(value);
+              } else if (filterId === "product.totalInventory" && op === "gte") {
+                where.variantRollup = {
+                  totalInventory: { gte: Number(value) }
+                };
+              }
+            }
+          }
+        }
+
+        console.log(`🔎 Prisma where clause:`, JSON.stringify(where, null, 2));
+
+        const items = await prisma.productLite.findMany({
+          where,
+          orderBy: { updatedAtShopify: "desc" },
+          take: first,
+          skip: after ? parseInt(after, 10) : 0,
+          include: {
+            tags: true
+          }
+        });
+
+        console.log(`📦 Found ${items.length} products matching filters`);
+
+        // Transform to match expected format
+        const transformedItems = items.map(item => ({
+          id: item.id,
+          title: item.title,
+          handle: item.handle,
+          status: item.status,
+          vendor: item.vendor,
+          productType: item.productType,
+          tags: item.tags.map(t => t.tag),
+          hasImages: item.hasImages,
+          updatedAtShopify: item.updatedAtShopify
+        }));
+
+        const nextCursor = items.length === first 
+          ? String((after ? parseInt(after, 10) : 0) + items.length) 
+          : null;
+
+        return res.json({
+          data: {
+            productsByFilter: { 
+              items: transformedItems, 
+              nextCursor, 
+              mode: "FAST_ONLY" 
+            },
+          },
+        });
+      } catch (filterError) {
+        console.error("❌ productsByFilter error:", filterError);
+        return res.status(500).json({
+          errors: [{ 
+            message: "Filter query failed", 
+            details: filterError.message 
+          }],
+        });
+      }
     }
 
     // ───────────────── snapshotRuns ─────────────────
@@ -191,7 +439,23 @@ app.post("/api/graphql", async (req, res) => {
       const first = Number(variables?.first ?? 25);
       const after = variables?.after ?? null;
 
+      const shop = await prisma.shop.findUnique({
+        where: { shopDomain: shopId },
+      });
+
+      if (!shop) {
+        return res.json({
+          data: {
+            snapshotRuns: {
+              runs: [],
+              nextCursor: null,
+            },
+          },
+        });
+      }
+
       const runs = await prisma.snapshotRun.findMany({
+        where: { shopId: shop.id },
         orderBy: { createdAt: "desc" },
         take: first,
         skip: after ? parseInt(after, 10) : 0,
@@ -219,8 +483,20 @@ app.post("/api/graphql", async (req, res) => {
       const first = Number(variables?.first ?? 50);
       const after = variables?.after ?? null;
 
+      const shop = await prisma.shop.findUnique({
+        where: { shopDomain: shopId },
+      });
+
+      if (!shop) {
+        return res.json({
+          data: {
+            snapshotRunEvents: { events: [], nextCursor: null },
+          },
+        });
+      }
+
       const events = await prisma.snapshotRunEvent.findMany({
-        where: { snapshotRunId: runId },
+        where: { snapshotRunId: runId, shopId: shop.id },
         orderBy: { createdAt: "desc" },
         take: first,
         skip: after ? parseInt(after, 10) : 0,
