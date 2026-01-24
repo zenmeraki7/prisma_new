@@ -8,7 +8,12 @@
     "yourAppIsReadyToExplore": "Deine App kann nun erkundet werden! Sie enthält alles, was du brauchst, um loszulegen: das <PolarisLink>Polaris Designsystem</PolarisLink>, die <AdminApiLink>Shopify Admin API</AdminApiLink> und die <AppBridgeLink>App Bridge</AppBridgeLink>-UI-Bibliothek sowie entsprechende Komponenten."
   },
   "NavigationMenu": {
-    "pageName": "Seitenname"
+    "pageName": "Seitenname",
+    "History": "Geschichte",
+    "Import": "Import",
+    "Settings": "Einstellungen",
+    "SpreadSheetEdit": "TabellenkalkulationBearbeiten",
+    "Export": "Export"
   },
   "NotFound": {
     "description": "Überprüfe die URL und versuche es erneut. Alternativ kannst du die Suchleiste verwenden, um zu finden, was du suchst.",

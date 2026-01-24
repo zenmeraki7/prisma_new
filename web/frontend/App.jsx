@@ -24,6 +24,21 @@ export default function App() {
             <a href="filteredProductspage">{t("NavigationMenu.FilteredProductsPage")}</a>
             <a href="productsindexPage">{t("NavigationMenu.ProductsIndexPage")}</a>
             <a href="snapshotjobspage">{t("NavigationMenu.SnapshotJobsPage")}</a>
+            <a href="/History">
+                {t("NavigationMenu.History")}
+              </a>
+              <a href="/Import">
+                {t("NavigationMenu.Import")}
+              </a>
+              <a href="/settings">
+                {t("NavigationMenu.Settings")}
+              </a>
+           <a href="/spreadsheetEdit">
+                {t("NavigationMenu.SpreadSheetEdit")}
+              </a>
+               <a href="/Export">
+                {t("NavigationMenu.Export")}
+              </a>
           </NavMenu>
           <Routes pages={pages} />
         </QueryProvider>
