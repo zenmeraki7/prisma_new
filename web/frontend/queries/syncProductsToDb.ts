@@ -8,15 +8,14 @@ export type SyncProductsResult = {
 };
 
 export async function syncProductsToDbRequest(
-  app: AppBridgeState,
+  _app: AppBridgeState, // kept for future App Bridge authenticated fetch if you want
   params: {
     first?: number;
     after?: string | null;
-  } = {}
+  } = {},
 ): Promise<SyncProductsResult> {
   const { first = 50, after = null } = params;
 
-  // Changed from mutation to query since backend handles it in query check
   const query = `
     query SyncProductsToDb($first: Int!, $after: String) {
       syncProductsToDb(first: $first, after: $after) {
@@ -39,7 +38,9 @@ export async function syncProductsToDbRequest(
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`Sync request failed: ${response.statusText} - ${text}`);
+    throw new Error(
+      `Sync request failed: ${response.statusText} - ${text}`,
+    );
   }
 
   const json = await response.json();
@@ -48,5 +49,5 @@ export async function syncProductsToDbRequest(
     throw new Error(`GraphQL errors: ${JSON.stringify(json.errors)}`);
   }
 
-  return json.data.syncProductsToDb;
+  return json.data.syncProductsToDb as SyncProductsResult;
 }

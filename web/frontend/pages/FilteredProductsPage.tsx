@@ -14,12 +14,10 @@ import {
   Box,
   TextField,
   Select,
-  Banner,
 } from "@shopify/polaris";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import {
   useInfiniteQuery,
-  useQuery,
   type UseInfiniteQueryResult,
   type InfiniteData,
 } from "@tanstack/react-query";
@@ -29,12 +27,7 @@ import {
   leaf,
   andGroup,
   type FilterExpr,
-  type FilterId,
 } from "../../lib/filters/dsl";
-import {
-  planFilterRequest,
-  type FilterExecutionMode,
-} from "../queries/planFilter";
 import {
   productsByFilterRequest,
   type ProductLiteDto,
@@ -86,57 +79,48 @@ function buildFilterExprFromUi(params: {
     }
   }
 
+  // If we have no children at all, return null so caller can decide
+  if (children.length === 0) return null;
+
   return andGroup(children);
 }
 
 /**
- * Plan hook – wraps planFilterRequest in react-query.
- */
-function usePlanFilter(
-  app: AppBridgeState | undefined,
-  filterExpr: FilterExpr | null,
-) {
-  return useQuery({
-    queryKey: ["planFilter", filterExpr],
-    enabled: !!app,
-    queryFn: () => {
-      if (!app) throw new Error("AppBridge not ready");
-      return planFilterRequest(app, filterExpr);
-    },
-  });
-}
-
-/**
  * Products hook – wraps productsByFilter with infinite scroll.
+ * We always use FAST_ONLY on this page.
  */
 function useProductsByFilter(params: {
   app: AppBridgeState | undefined;
   filterExpr: FilterExpr | null;
-  executionMode: FilterExecutionMode | undefined;
-  planHash: string | undefined;
+  hasApplied: boolean;
 }): UseInfiniteQueryResult<
   InfiniteData<ProductsByFilterPageDto, string | null>,
   Error
 > {
-  const { app, filterExpr, executionMode, planHash } = params;
+  const { app, filterExpr, hasApplied } = params;
 
-  const enabled = !!app && !!executionMode; // Allow null filter to show all products
+  const enabled = !!app && hasApplied;
 
-  return useInfiniteQuery<ProductsByFilterPageDto, Error, InfiniteData<ProductsByFilterPageDto, string | null>>({
-    queryKey: ["productsByFilter", planHash, executionMode],
+  return useInfiniteQuery<
+    ProductsByFilterPageDto,
+    Error,
+    InfiniteData<ProductsByFilterPageDto, string | null>
+  >({
+    queryKey: ["productsByFilter", filterExpr],
     enabled,
     initialPageParam: null as string | null,
     queryFn: async ({ pageParam }) => {
-      if (!app || !executionMode) {
-        throw new Error("AppBridge or executionMode not ready");
+      if (!app) {
+        throw new Error("AppBridge not ready");
       }
 
-      // Use empty filter if filterExpr is null (shows all products)
-      const actualFilter = filterExpr || { type: "group", op: "and", children: [] };
+      // Use empty AND group if filterExpr is null (show all products)
+      const actualFilter =
+        filterExpr || ({ type: "group", op: "and", children: [] } as FilterExpr);
 
       return productsByFilterRequest(app, {
         filter: actualFilter,
-        mode: executionMode,
+        mode: "FAST_ONLY",
         first: 50,
         after: (pageParam as string | null) ?? null,
       });
@@ -160,7 +144,7 @@ export default function FilteredProductsPage() {
   // Start with null - no products shown until user clicks Apply
   const [appliedFilterExpr, setAppliedFilterExpr] =
     useState<FilterExpr | null>(null);
-  
+
   // Track if user has applied filters at least once
   const [hasApplied, setHasApplied] = useState(false);
 
@@ -177,18 +161,11 @@ export default function FilteredProductsPage() {
     [status, vendor, productType, tag, hasImages, minTotalInventory],
   );
 
-  // Plan for the *applied* filter
-  const planQuery = usePlanFilter(app, appliedFilterExpr);
-  const executionMode = planQuery.data?.executionMode;
-  const planHash = planQuery.data?.planHash;
-  const filterSummary = planQuery.data?.filterSummary;
-
-  // Products for that plan
+  // Products for the applied filter
   const productsQuery = useProductsByFilter({
     app,
     filterExpr: appliedFilterExpr,
-    executionMode,
-    planHash,
+    hasApplied,
   });
 
   const allItems: ProductLiteDto[] = useMemo(() => {
@@ -206,14 +183,13 @@ export default function FilteredProductsPage() {
       resourceIDResolver: (product) => product.id,
     });
 
-  const applying = planQuery.isLoading;
-  const loadingProducts = productsQuery.isLoading;
-
-  const showSnapshotBanner =
-    executionMode === "SNAPSHOT" && planHash && !loadingProducts;
+  const applying = productsQuery.isFetching && hasApplied;
+  const loadingProducts = productsQuery.isLoading && hasApplied;
 
   const handleApplyFilters = () => {
-    const newFilter = uiFilterExpr || { type: "group", op: "and", children: [] };
+    // If UI filter is null, we send an empty AND group to mean "no filter"
+    const newFilter =
+      uiFilterExpr || ({ type: "group", op: "and", children: [] } as FilterExpr);
     setAppliedFilterExpr(newFilter);
     setHasApplied(true);
   };
@@ -309,24 +285,6 @@ export default function FilteredProductsPage() {
                   )}
                 </InlineStack>
               </InlineStack>
-              {filterSummary && (
-                <Box paddingBlockStart="200">
-                  <Text as="p" variant="bodySm" tone="subdued">
-                    Plan: {executionMode ?? "—"} · {filterSummary}
-                  </Text>
-                </Box>
-              )}
-              {showSnapshotBanner && (
-                <Box paddingBlockStart="200">
-                  <Banner tone="info">
-                    <p>
-                      This filter requires SNAPSHOT mode (planHash{" "}
-                      <code>{planHash}</code>). The backend will evaluate it via
-                      BulkOperations and materialize the result.
-                    </p>
-                  </Banner>
-                </Box>
-              )}
             </Box>
           </Card>
         </Layout.Section>
@@ -336,7 +294,8 @@ export default function FilteredProductsPage() {
             <Box padding="400">
               {!hasApplied && (
                 <Text as="p" variant="bodyMd" tone="subdued">
-                  Set your filters above and click "Apply filters" to see results.
+                  Set your filters above and click "Apply filters" to see
+                  results.
                 </Text>
               )}
               {hasApplied && loadingProducts && (

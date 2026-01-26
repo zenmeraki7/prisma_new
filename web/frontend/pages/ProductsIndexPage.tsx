@@ -15,8 +15,6 @@ import {
   Tabs,
   TextField,
   Select,
-  Modal,
-  BlockStack,
   Button,
 } from "@shopify/polaris";
 import { useAppBridge } from "@shopify/app-bridge-react";
@@ -43,7 +41,7 @@ import {
 } from "../queries/snapshotHistory";
 
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { leaf, andGroup, type FilterExpr, type FilterId } from "../../lib/filters/dsl";
+import { leaf, andGroup, type FilterExpr } from "../../lib/filters/dsl";
 
 /* ============================
    SHARED HELPERS
@@ -54,11 +52,9 @@ const productResourceName = {
   plural: "products",
 };
 
-function productStatusTone(status: string):
-  | "success"
-  | "critical"
-  | "attention"
-  | "subdued" {
+function productStatusTone(
+  status: string,
+): "success" | "critical" | "attention" | "subdued" {
   if (status === "ACTIVE") return "success";
   if (status === "DRAFT") return "attention";
   if (status === "ARCHIVED") return "subdued";
@@ -90,7 +86,7 @@ function useBootstrapProducts(app: AppBridgeState | undefined) {
 function usePlanFilter(app: AppBridgeState | undefined, filterExpr: FilterExpr | null) {
   return useQuery({
     queryKey: ["planFilter", filterExpr],
-    enabled: !!app && !!filterExpr,
+    enabled: !!app && filterExpr !== null,
     queryFn: () => {
       if (!app) throw new Error("AppBridge not ready");
       return planFilterRequest(app, filterExpr);
@@ -105,7 +101,7 @@ function useProductsByFilter(params: {
   planHash: string | undefined;
 }) {
   const { app, filterExpr, executionMode, planHash } = params;
-  const enabled = !!app && !!executionMode && !!filterExpr;
+  const enabled = !!app && !!executionMode && filterExpr !== null;
 
   return useInfiniteQuery<
     ProductsByFilterPageDto,
@@ -116,9 +112,11 @@ function useProductsByFilter(params: {
     queryKey: ["productsByFilter", planHash, executionMode],
     enabled,
     queryFn: async ({ pageParam = null }) => {
-      if (!app || !executionMode) throw new Error("AppBridge or executionMode not ready");
+      if (!app || !executionMode || filterExpr === null) {
+        throw new Error("AppBridge, executionMode, or filterExpr not ready");
+      }
       return productsByFilterRequest(app, {
-        filter: filterExpr!,
+        filter: filterExpr,
         mode: executionMode,
         first: 50,
         after: pageParam,
@@ -168,6 +166,7 @@ function useSnapshotRunEvents(app: AppBridgeState | undefined, runId: string | n
 /* ============================
    ALL PRODUCTS TAB
 ============================ */
+
 function AllProductsTab() {
   const app = useAppBridge();
   const query = useBootstrapProducts(app);
@@ -175,7 +174,7 @@ function AllProductsTab() {
   const status = query.data?.pages[0]?.status;
   const allItems: ProductLiteDto[] = useMemo(
     () => query.data?.pages.flatMap((p) => p.items) ?? [],
-    [query.data]
+    [query.data],
   );
 
   const { selectedResources, allResourcesSelected, handleSelectionChange } =
@@ -227,8 +226,7 @@ function AllProductsTab() {
             <Banner tone="info">
               <p>No products found in FAST plane yet.</p>
               <p>
-                If you just installed the app, the initial sync might still be
-                running.
+                If you just installed the app, the initial sync might still be running.
               </p>
             </Banner>
           )}
@@ -239,7 +237,9 @@ function AllProductsTab() {
             <IndexTable
               resourceName={productResourceName}
               itemCount={allItems.length}
-              selectedItemsCount={allResourcesSelected ? "All" : selectedResources.length}
+              selectedItemsCount={
+                allResourcesSelected ? "All" : selectedResources.length
+              }
               onSelectionChange={handleSelectionChange}
               headings={[
                 { title: "Title" },
@@ -303,7 +303,11 @@ function AllProductsTab() {
             <Box padding="400">
               {query.hasNextPage && (
                 <InlineStack align="center" blockAlign="center">
-                  <Button onClick={() => query.fetchNextPage()} loading={loadingMore} disabled={loadingMore}>
+                  <Button
+                    onClick={() => query.fetchNextPage()}
+                    loading={loadingMore}
+                    disabled={loadingMore}
+                  >
                     Load more
                   </Button>
                 </InlineStack>
@@ -319,10 +323,6 @@ function AllProductsTab() {
 /* ============================
    FILTERED PRODUCTS TAB
 ============================ */
-function leafIf(cond: boolean, filterId: FilterId, op: any, value: unknown): FilterExpr | null {
-  if (!cond) return null;
-  return leaf(filterId, op, value);
-}
 
 function buildFilterExprFromUi(params: {
   status: string;
@@ -334,24 +334,39 @@ function buildFilterExprFromUi(params: {
 }): FilterExpr | null {
   const children: FilterExpr[] = [];
 
-  // FAST plane expects exact string or boolean matches
-  if (params.status !== "ALL") children.push(leaf("product.status", "eq", params.status.toUpperCase()));
+  if (params.status !== "ALL") {
+    children.push(
+      leaf("product.status", "eq", params.status.toUpperCase()),
+    );
+  }
 
-  if (params.vendor.trim()) children.push(leaf("product.vendor", "eq", params.vendor.trim())); // changed contains -> eq
-  if (params.productType.trim()) children.push(leaf("product.productType", "eq", params.productType.trim())); // eq
-  if (params.tag.trim()) children.push(leaf("product.tags", "eq", params.tag.trim())); // eq
+  if (params.vendor.trim()) {
+    children.push(
+      leaf("product.vendor", "contains", params.vendor.trim()),
+    );
+  }
 
-  if (params.hasImages === "YES") children.push(leaf("product.hasImages", "eq", true));
-  if (params.hasImages === "NO") children.push(leaf("product.hasImages", "eq", false));
+  if (params.productType.trim()) {
+    children.push(
+      leaf("product.productType", "contains", params.productType.trim()),
+    );
+  }
 
-  // Remove minTotalInventory for FAST_ONLY (optional)
-  // if (params.minTotalInventory.trim()) {
-  //   const parsed = Number(params.minTotalInventory);
-  //   if (!Number.isNaN(parsed)) children.push(leaf("product.totalInventory", "gte", parsed));
-  // }
+  if (params.tag.trim()) {
+    children.push(
+      leaf("product.tags", "contains", params.tag.trim()),
+    );
+  }
+
+  if (params.hasImages === "YES") {
+    children.push(leaf("product.hasImages", "eq", true));
+  } else if (params.hasImages === "NO") {
+    children.push(leaf("product.hasImages", "eq", false));
+  }
 
   return andGroup(children);
 }
+
 
 function FilteredProductsTab() {
   const app = useAppBridge();
@@ -362,11 +377,20 @@ function FilteredProductsTab() {
   const [tag, setTag] = useState("");
   const [hasImages, setHasImages] = useState<string>("ANY");
   const [minTotalInventory, setMinTotalInventory] = useState("");
-  const [appliedFilterExpr, setAppliedFilterExpr] = useState<FilterExpr | null>(null);
+  const [appliedFilterExpr, setAppliedFilterExpr] =
+    useState<FilterExpr | null>(null);
 
   const uiFilterExpr = useMemo(
-    () => buildFilterExprFromUi({ status, vendor, productType, tag, hasImages, minTotalInventory }),
-    [status, vendor, productType, tag, hasImages, minTotalInventory]
+    () =>
+      buildFilterExprFromUi({
+        status,
+        vendor,
+        productType,
+        tag,
+        hasImages,
+        minTotalInventory,
+      }),
+    [status, vendor, productType, tag, hasImages, minTotalInventory],
   );
 
   const planQuery = usePlanFilter(app, appliedFilterExpr);
@@ -383,7 +407,7 @@ function FilteredProductsTab() {
 
   const allItems: ProductLiteDto[] = useMemo(
     () => productsQuery.data?.pages.flatMap((p) => p.items) ?? [],
-    [productsQuery.data]
+    [productsQuery.data],
   );
 
   const { selectedResources, allResourcesSelected, handleSelectionChange } =
@@ -392,9 +416,12 @@ function FilteredProductsTab() {
   const applying = planQuery.isLoading;
   const loadingProducts = productsQuery.isLoading;
   const loadingMore = productsQuery.isFetchingNextPage;
-  const showSnapshotBanner = executionMode === "SNAPSHOT" && planHash && !loadingProducts;
+  const showSnapshotBanner =
+    executionMode === "SNAPSHOT" && planHash && !loadingProducts;
 
-  const handleApplyFilters = () => setAppliedFilterExpr(uiFilterExpr);
+  const handleApplyFilters = () => {
+    setAppliedFilterExpr(uiFilterExpr);
+  };
 
   return (
     <Layout.Section>
@@ -402,56 +429,126 @@ function FilteredProductsTab() {
         <Box padding="400">
           <InlineStack align="space-between" gap="300" blockAlign="center">
             <InlineStack gap="200">
-              <Select labelHidden label="Status" options={[
-                { label: "All", value: "ALL" },
-                { label: "Active", value: "ACTIVE" },
-                { label: "Draft", value: "DRAFT" },
-                { label: "Archived", value: "ARCHIVED" },
-              ]} value={status} onChange={setStatus} />
-              <Select labelHidden label="Images" options={[
-                { label: "Any", value: "ANY" },
-                { label: "Has images", value: "YES" },
-                { label: "No images", value: "NO" },
-              ]} value={hasImages} onChange={setHasImages} />
-              <TextField labelHidden label="Vendor" placeholder="Vendor" value={vendor} onChange={setVendor} />
-              <TextField labelHidden label="Product type" placeholder="Product type" value={productType} onChange={setProductType} />
-              <TextField labelHidden label="Tag" placeholder="Tag contains…" value={tag} onChange={setTag} />
-              <TextField labelHidden label="Min total inventory" type="number" placeholder="Min inventory" value={minTotalInventory} onChange={setMinTotalInventory} />
+              <Select
+                labelHidden
+                label="Status"
+                options={[
+                  { label: "All", value: "ALL" },
+                  { label: "Active", value: "ACTIVE" },
+                  { label: "Draft", value: "DRAFT" },
+                  { label: "Archived", value: "ARCHIVED" },
+                ]}
+                value={status}
+                onChange={setStatus}
+              />
+              <Select
+                labelHidden
+                label="Images"
+                options={[
+                  { label: "Any", value: "ANY" },
+                  { label: "Has images", value: "YES" },
+                  { label: "No images", value: "NO" },
+                ]}
+                value={hasImages}
+                onChange={setHasImages}
+              />
+              <TextField
+                labelHidden
+                label="Vendor"
+                placeholder="Vendor"
+                value={vendor}
+                onChange={setVendor}
+              />
+              <TextField
+                labelHidden
+                label="Product type"
+                placeholder="Product type"
+                value={productType}
+                onChange={setProductType}
+              />
+              <TextField
+                labelHidden
+                label="Tag"
+                placeholder="Tag contains…"
+                value={tag}
+                onChange={setTag}
+              />
+              <TextField
+                labelHidden
+                label="Min total inventory"
+                type="number"
+                placeholder="Min inventory"
+                value={minTotalInventory}
+                onChange={setMinTotalInventory}
+              />
             </InlineStack>
             <InlineStack gap="200">
-              <Button onClick={handleApplyFilters} primary loading={applying}>Apply</Button>
-              {productsQuery.hasNextPage && <Button onClick={() => productsQuery.fetchNextPage()} loading={loadingMore} disabled={loadingMore}>Load more</Button>}
+              <Button onClick={handleApplyFilters} primary loading={applying}>
+                Apply
+              </Button>
+              {productsQuery.hasNextPage && (
+                <Button
+                  onClick={() => productsQuery.fetchNextPage()}
+                  loading={loadingMore}
+                  disabled={loadingMore}
+                >
+                  Load more
+                </Button>
+              )}
             </InlineStack>
           </InlineStack>
 
-          {filterSummary && <Box paddingBlockStart="200"><Text as="p" variant="bodySm" tone="subdued">Plan: {executionMode ?? "—"} · {filterSummary}</Text></Box>}
+          {filterSummary && (
+            <Box paddingBlockStart="200">
+              <Text as="p" variant="bodySm" tone="subdued">
+                Plan: {executionMode ?? "—"} · {filterSummary}
+              </Text>
+            </Box>
+          )}
           {showSnapshotBanner && (
             <Box paddingBlockStart="200">
               <Banner tone="info">
-                <p>This filter requires SNAPSHOT mode (planHash <code>{planHash}</code>).</p>
+                <p>
+                  This filter requires SNAPSHOT mode (planHash{" "}
+                  <code>{planHash}</code>).
+                </p>
               </Banner>
             </Box>
           )}
         </Box>
 
         <Box padding="400">
-          {loadingProducts && (
+          {appliedFilterExpr === null && (
+            <Text as="p" variant="bodyMd" tone="subdued">
+              Set your filters above and click “Apply” to see results.
+            </Text>
+          )}
+
+          {appliedFilterExpr !== null && loadingProducts && (
             <InlineStack align="center" gap="200" blockAlign="center">
               <Spinner />
-              <Text as="p" variant="bodyMd">Loading filtered products…</Text>
+              <Text as="p" variant="bodyMd">
+                Loading filtered products…
+              </Text>
             </InlineStack>
           )}
 
-          {!loadingProducts && allItems.length === 0 && (
-            <Text as="p" variant="bodyMd">No products match the current filter.</Text>
-          )}
+          {appliedFilterExpr !== null &&
+            !loadingProducts &&
+            allItems.length === 0 && (
+              <Text as="p" variant="bodyMd">
+                No products match the current filter.
+              </Text>
+            )}
         </Box>
 
-        {!loadingProducts && allItems.length > 0 && (
+        {appliedFilterExpr !== null && !loadingProducts && allItems.length > 0 && (
           <IndexTable
             resourceName={productResourceName}
             itemCount={allItems.length}
-            selectedItemsCount={allResourcesSelected ? "All" : selectedResources.length}
+            selectedItemsCount={
+              allResourcesSelected ? "All" : selectedResources.length
+            }
             onSelectionChange={handleSelectionChange}
             headings={[
               { title: "Title" },
@@ -464,14 +561,50 @@ function FilteredProductsTab() {
             ]}
           >
             {allItems.map((product, index) => (
-              <IndexTable.Row id={product.id} key={product.id} position={index} selected={selectedResources.includes(product.id)}>
-                <IndexTable.Cell><Text as="span" fontWeight="semibold">{product.title}</Text><Text as="div" variant="bodySm" tone="subdued">{product.handle}</Text></IndexTable.Cell>
-                <IndexTable.Cell><Badge tone={productStatusTone(product.status)}>{product.status}</Badge></IndexTable.Cell>
-                <IndexTable.Cell><Text as="span">{product.vendor || "—"}</Text></IndexTable.Cell>
-                <IndexTable.Cell><Text as="span">{product.productType || "—"}</Text></IndexTable.Cell>
-                <IndexTable.Cell><Text as="span">{product.tags.length ? product.tags.join(", ") : "—"}</Text></IndexTable.Cell>
-                <IndexTable.Cell>{product.hasImages ? <Badge tone="success">Yes</Badge> : <Badge tone="critical">No</Badge>}</IndexTable.Cell>
-                <IndexTable.Cell><Text as="span" variant="bodySm" tone="subdued">{product.updatedAtShopify ? new Date(product.updatedAtShopify).toLocaleString() : "—"}</Text></IndexTable.Cell>
+              <IndexTable.Row
+                id={product.id}
+                key={product.id}
+                position={index}
+                selected={selectedResources.includes(product.id)}
+              >
+                <IndexTable.Cell>
+                  <Text as="span" fontWeight="semibold">
+                    {product.title}
+                  </Text>
+                  <Text as="div" variant="bodySm" tone="subdued">
+                    {product.handle}
+                  </Text>
+                </IndexTable.Cell>
+                <IndexTable.Cell>
+                  <Badge tone={productStatusTone(product.status)}>
+                    {product.status}
+                  </Badge>
+                </IndexTable.Cell>
+                <IndexTable.Cell>
+                  <Text as="span">{product.vendor || "—"}</Text>
+                </IndexTable.Cell>
+                <IndexTable.Cell>
+                  <Text as="span">{product.productType || "—"}</Text>
+                </IndexTable.Cell>
+                <IndexTable.Cell>
+                  <Text as="span">
+                    {product.tags.length ? product.tags.join(", ") : "—"}
+                  </Text>
+                </IndexTable.Cell>
+                <IndexTable.Cell>
+                  {product.hasImages ? (
+                    <Badge tone="success">Yes</Badge>
+                  ) : (
+                    <Badge tone="critical">No</Badge>
+                  )}
+                </IndexTable.Cell>
+                <IndexTable.Cell>
+                  <Text as="span" variant="bodySm" tone="subdued">
+                    {product.updatedAtShopify
+                      ? new Date(product.updatedAtShopify).toLocaleString()
+                      : "—"}
+                  </Text>
+                </IndexTable.Cell>
               </IndexTable.Row>
             ))}
           </IndexTable>
@@ -484,30 +617,56 @@ function FilteredProductsTab() {
 /* ============================
    SNAPSHOT JOBS TAB
 ============================ */
+
 function SnapshotJobsTab() {
   const app = useAppBridge();
   const runsQuery = useSnapshotRuns(app);
-  const allRuns = useMemo(() => runsQuery.data?.pages.flatMap((p) => p.runs) ?? [], [runsQuery.data]);
+  const allRuns = useMemo(
+    () => runsQuery.data?.pages.flatMap((p) => p.runs) ?? [],
+    [runsQuery.data],
+  );
 
   return (
     <Layout.Section>
       <Card title="Snapshot runs">
         <Box padding="400">
           {runsQuery.isLoading && <Spinner />}
-          {!runsQuery.isLoading && !allRuns.length && <Text as="p" tone="subdued">No snapshot runs yet.</Text>}
+          {!runsQuery.isLoading && !allRuns.length && (
+            <Text as="p" tone="subdued">
+              No snapshot runs yet.
+            </Text>
+          )}
           {!runsQuery.isLoading && allRuns.length > 0 && (
             <IndexTable
               resourceName={{ singular: "snapshot run", plural: "snapshot runs" }}
               itemCount={allRuns.length}
-              headings={[{ title: "ID" }, { title: "Started At" }, { title: "Status" }]}
+              headings={[
+                { title: "ID" },
+                { title: "Started At" },
+                { title: "Status" },
+              ]}
               selectedItemsCount={0}
               onSelectionChange={() => {}}
             >
               {allRuns.map((run, idx) => (
                 <IndexTable.Row key={run.id} id={run.id} position={idx}>
                   <IndexTable.Cell>{run.id}</IndexTable.Cell>
-                  <IndexTable.Cell>{new Date(run.createdAt).toLocaleString()}</IndexTable.Cell>
-                  <IndexTable.Cell><Badge tone={run.status === "SUCCESS" ? "success" : run.status === "FAILED" ? "critical" : "attention"}>{run.status}</Badge></IndexTable.Cell>
+                  <IndexTable.Cell>
+                    {new Date(run.createdAt).toLocaleString()}
+                  </IndexTable.Cell>
+                  <IndexTable.Cell>
+                    <Badge
+                      tone={
+                        run.status === "SUCCESS"
+                          ? "success"
+                          : run.status === "FAILED"
+                          ? "critical"
+                          : "attention"
+                      }
+                    >
+                      {run.status}
+                    </Badge>
+                  </IndexTable.Cell>
                 </IndexTable.Row>
               ))}
             </IndexTable>
@@ -521,6 +680,7 @@ function SnapshotJobsTab() {
 /* ============================
    MAIN PAGE
 ============================ */
+
 export default function ProductsIndexPage() {
   const tabs = [
     { id: "all", content: "All products", component: <AllProductsTab /> },
@@ -531,8 +691,13 @@ export default function ProductsIndexPage() {
   const [selectedTab, setSelectedTab] = useState(0);
 
   return (
-    <Page title="Products">
-      <Tabs tabs={tabs} selected={selectedTab} onSelect={setSelectedTab} fitted>
+    <Page fullWidth title="Products">
+      <Tabs
+        tabs={tabs}
+        selected={selectedTab}
+        onSelect={setSelectedTab}
+        fitted
+      >
         {tabs[selectedTab].component}
       </Tabs>
     </Page>
