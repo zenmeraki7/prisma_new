@@ -329,39 +329,53 @@ function buildFilterExprFromUi(params: {
   vendor: string;
   productType: string;
   tag: string;
-  hasImages: string;
+  hasImages: string;        // "ANY" | "YES" | "NO"
   minTotalInventory: string;
 }): FilterExpr | null {
   const children: FilterExpr[] = [];
 
+  // 1) Status
   if (params.status !== "ALL") {
-    children.push(
-      leaf("product.status", "eq", params.status.toUpperCase()),
-    );
+    children.push(leaf("product.status", "eq", params.status.toUpperCase()));
   }
 
+  // 2) Vendor
   if (params.vendor.trim()) {
-    children.push(
-      leaf("product.vendor", "contains", params.vendor.trim()),
-    );
+    children.push(leaf("product.vendor", "contains", params.vendor.trim()));
   }
 
+  // 3) Product type
   if (params.productType.trim()) {
     children.push(
       leaf("product.productType", "contains", params.productType.trim()),
     );
   }
 
+  // 4) Tag
   if (params.tag.trim()) {
-    children.push(
-      leaf("product.tags", "contains", params.tag.trim()),
-    );
+    children.push(leaf("product.tags", "contains", params.tag.trim()));
   }
 
+  // 5) Has images
   if (params.hasImages === "YES") {
     children.push(leaf("product.hasImages", "eq", true));
   } else if (params.hasImages === "NO") {
     children.push(leaf("product.hasImages", "eq", false));
+  }
+
+  // 6) Min total inventory  🚨 THIS IS THE MISSING PIECE
+  if (params.minTotalInventory.trim()) {
+    const parsed = Number(params.minTotalInventory);
+    if (!Number.isNaN(parsed)) {
+      children.push(
+        leaf("product.totalInventory", "gte", parsed),
+      );
+    }
+  }
+
+  // If nothing at all is set, return null (no filter)
+  if (children.length === 0) {
+    return null;
   }
 
   return andGroup(children);
