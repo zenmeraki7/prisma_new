@@ -1,7 +1,7 @@
 // web/workers/fastPlaneFullSyncWorker.ts
 import { Worker } from "bullmq";
 import { FAST_SYNC_QUEUE_NAME, redis } from "../jobs/queue.ts";
-import { runFastFullSync } from "../lib/sync/fullSyncService.ts";
+import { runFastFullSync } from "../..";
 
 type FastFullSyncJob = {
   shopId: string;

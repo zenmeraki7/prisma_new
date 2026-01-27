@@ -1,4 +1,4 @@
-//web/graphql/schema.ts
+//web/gra
 import { createSchema } from "graphql-yoga";
 import { prisma } from "../db/prisma.js";
 
