@@ -15,12 +15,7 @@
     "FilteredProductsPage": "Filterd Products",
     "ProductsIndexPage": "Products Index Page",
     "SnapsshotJobsPage": "Snaps shot Jobs Page",
-    "SnapshotJobsPage": "Snap shot Jobs Page",
-    "History": "History",
-    "Import": "Import",
-    "Settings": "Settings",
-    "SpreadSheetEdit": "SpreadSheetEdit",
-    "Export": "Export"
+    "SnapshotJobsPage": "Snap shot Jobs Page"
   },
   "NotFound": {
     "description": "Check the URL and try again, or use the search bar to find what you need.",
