@@ -16,6 +16,7 @@ import {
   TextField,
   Select,
   Button,
+  
 } from "@shopify/polaris";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import type { AppBridgeState } from "@shopify/app-bridge-react";
@@ -67,9 +68,17 @@ function productStatusTone(
 
 function useBootstrapProducts(app: AppBridgeState | undefined) {
   return useInfiniteQuery<
-    { items: ProductLiteDto[]; nextCursor: string | null; status?: BootstrapStatusDto },
+    {
+      items: ProductLiteDto[];
+      nextCursor: string | null;
+      status?: BootstrapStatusDto;
+    },
     Error,
-    { items: ProductLiteDto[]; nextCursor: string | null; status?: BootstrapStatusDto },
+    {
+      items: ProductLiteDto[];
+      nextCursor: string | null;
+      status?: BootstrapStatusDto;
+    },
     string | null
   >({
     queryKey: ["bootstrapProducts"],
@@ -83,7 +92,10 @@ function useBootstrapProducts(app: AppBridgeState | undefined) {
   });
 }
 
-function usePlanFilter(app: AppBridgeState | undefined, filterExpr: FilterExpr | null) {
+function usePlanFilter(
+  app: AppBridgeState | undefined,
+  filterExpr: FilterExpr | null,
+) {
   return useQuery({
     queryKey: ["planFilter", filterExpr],
     enabled: !!app && filterExpr !== null,
@@ -145,7 +157,10 @@ function useSnapshotRuns(app: AppBridgeState | undefined) {
   });
 }
 
-function useSnapshotRunEvents(app: AppBridgeState | undefined, runId: string | null) {
+function useSnapshotRunEvents(
+  app: AppBridgeState | undefined,
+  runId: string | null,
+) {
   return useInfiniteQuery<
     { events: SnapshotRunEventDto[]; nextCursor: string | null },
     Error,
@@ -156,7 +171,11 @@ function useSnapshotRunEvents(app: AppBridgeState | undefined, runId: string | n
     enabled: !!app && !!runId,
     queryFn: async ({ pageParam = null }) => {
       if (!app || !runId) throw new Error("AppBridge or runId not ready");
-      return snapshotRunEventsRequest(app, { runId, first: 50, after: pageParam });
+      return snapshotRunEventsRequest(app, {
+        runId,
+        first: 50,
+        after: pageParam,
+      });
     },
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     initialPageParam: null,
@@ -198,11 +217,14 @@ function AllProductsTab() {
                 </Text>
                 {status.fastLastSyncAt && (
                   <Text as="span" variant="bodySm" tone="subdued">
-                    Last sync: {new Date(status.fastLastSyncAt).toLocaleString()}
+                    Last sync:{" "}
+                    {new Date(status.fastLastSyncAt).toLocaleString()}
                   </Text>
                 )}
               </InlineStack>
-              {status.syncEnqueued && <Badge tone="attention">Sync enqueued</Badge>}
+              {status.syncEnqueued && (
+                <Badge tone="attention">Sync enqueued</Badge>
+              )}
             </InlineStack>
           )}
           {!status && (
@@ -226,7 +248,8 @@ function AllProductsTab() {
             <Banner tone="info">
               <p>No products found in FAST plane yet.</p>
               <p>
-                If you just installed the app, the initial sync might still be running.
+                If you just installed the app, the initial sync might still be
+                running.
               </p>
             </Banner>
           )}
@@ -329,7 +352,7 @@ function buildFilterExprFromUi(params: {
   vendor: string;
   productType: string;
   tag: string;
-  hasImages: string;        // "ANY" | "YES" | "NO"
+  hasImages: string; // "ANY" | "YES" | "NO"
   minTotalInventory: string;
 }): FilterExpr | null {
   const children: FilterExpr[] = [];
@@ -367,9 +390,7 @@ function buildFilterExprFromUi(params: {
   if (params.minTotalInventory.trim()) {
     const parsed = Number(params.minTotalInventory);
     if (!Number.isNaN(parsed)) {
-      children.push(
-        leaf("product.totalInventory", "gte", parsed),
-      );
+      children.push(leaf("product.totalInventory", "gte", parsed));
     }
   }
 
@@ -381,7 +402,6 @@ function buildFilterExprFromUi(params: {
   return andGroup(children);
 }
 
-
 function FilteredProductsTab() {
   const app = useAppBridge();
 
@@ -391,8 +411,9 @@ function FilteredProductsTab() {
   const [tag, setTag] = useState("");
   const [hasImages, setHasImages] = useState<string>("ANY");
   const [minTotalInventory, setMinTotalInventory] = useState("");
-  const [appliedFilterExpr, setAppliedFilterExpr] =
-    useState<FilterExpr | null>(null);
+  const [appliedFilterExpr, setAppliedFilterExpr] = useState<FilterExpr | null>(
+    null,
+  );
 
   const uiFilterExpr = useMemo(
     () =>
@@ -497,7 +518,11 @@ function FilteredProductsTab() {
               />
             </InlineStack>
             <InlineStack gap="200">
-              <Button onClick={handleApplyFilters} primary loading={applying}>
+              <Button
+                variant="primary"
+                onClick={handleApplyFilters}
+                loading={applying}
+              >
                 Apply
               </Button>
               {productsQuery.hasNextPage && (
@@ -556,73 +581,75 @@ function FilteredProductsTab() {
             )}
         </Box>
 
-        {appliedFilterExpr !== null && !loadingProducts && allItems.length > 0 && (
-          <IndexTable
-            resourceName={productResourceName}
-            itemCount={allItems.length}
-            selectedItemsCount={
-              allResourcesSelected ? "All" : selectedResources.length
-            }
-            onSelectionChange={handleSelectionChange}
-            headings={[
-              { title: "Title" },
-              { title: "Status" },
-              { title: "Vendor" },
-              { title: "Type" },
-              { title: "Tags" },
-              { title: "Images" },
-              { title: "Updated" },
-            ]}
-          >
-            {allItems.map((product, index) => (
-              <IndexTable.Row
-                id={product.id}
-                key={product.id}
-                position={index}
-                selected={selectedResources.includes(product.id)}
-              >
-                <IndexTable.Cell>
-                  <Text as="span" fontWeight="semibold">
-                    {product.title}
-                  </Text>
-                  <Text as="div" variant="bodySm" tone="subdued">
-                    {product.handle}
-                  </Text>
-                </IndexTable.Cell>
-                <IndexTable.Cell>
-                  <Badge tone={productStatusTone(product.status)}>
-                    {product.status}
-                  </Badge>
-                </IndexTable.Cell>
-                <IndexTable.Cell>
-                  <Text as="span">{product.vendor || "—"}</Text>
-                </IndexTable.Cell>
-                <IndexTable.Cell>
-                  <Text as="span">{product.productType || "—"}</Text>
-                </IndexTable.Cell>
-                <IndexTable.Cell>
-                  <Text as="span">
-                    {product.tags.length ? product.tags.join(", ") : "—"}
-                  </Text>
-                </IndexTable.Cell>
-                <IndexTable.Cell>
-                  {product.hasImages ? (
-                    <Badge tone="success">Yes</Badge>
-                  ) : (
-                    <Badge tone="critical">No</Badge>
-                  )}
-                </IndexTable.Cell>
-                <IndexTable.Cell>
-                  <Text as="span" variant="bodySm" tone="subdued">
-                    {product.updatedAtShopify
-                      ? new Date(product.updatedAtShopify).toLocaleString()
-                      : "—"}
-                  </Text>
-                </IndexTable.Cell>
-              </IndexTable.Row>
-            ))}
-          </IndexTable>
-        )}
+        {appliedFilterExpr !== null &&
+          !loadingProducts &&
+          allItems.length > 0 && (
+            <IndexTable
+              resourceName={productResourceName}
+              itemCount={allItems.length}
+              selectedItemsCount={
+                allResourcesSelected ? "All" : selectedResources.length
+              }
+              onSelectionChange={handleSelectionChange}
+              headings={[
+                { title: "Title" },
+                { title: "Status" },
+                { title: "Vendor" },
+                { title: "Type" },
+                { title: "Tags" },
+                { title: "Images" },
+                { title: "Updated" },
+              ]}
+            >
+              {allItems.map((product, index) => (
+                <IndexTable.Row
+                  id={product.id}
+                  key={product.id}
+                  position={index}
+                  selected={selectedResources.includes(product.id)}
+                >
+                  <IndexTable.Cell>
+                    <Text as="span" fontWeight="semibold">
+                      {product.title}
+                    </Text>
+                    <Text as="div" variant="bodySm" tone="subdued">
+                      {product.handle}
+                    </Text>
+                  </IndexTable.Cell>
+                  <IndexTable.Cell>
+                    <Badge tone={productStatusTone(product.status)}>
+                      {product.status}
+                    </Badge>
+                  </IndexTable.Cell>
+                  <IndexTable.Cell>
+                    <Text as="span">{product.vendor || "—"}</Text>
+                  </IndexTable.Cell>
+                  <IndexTable.Cell>
+                    <Text as="span">{product.productType || "—"}</Text>
+                  </IndexTable.Cell>
+                  <IndexTable.Cell>
+                    <Text as="span">
+                      {product.tags.length ? product.tags.join(", ") : "—"}
+                    </Text>
+                  </IndexTable.Cell>
+                  <IndexTable.Cell>
+                    {product.hasImages ? (
+                      <Badge tone="success">Yes</Badge>
+                    ) : (
+                      <Badge tone="critical">No</Badge>
+                    )}
+                  </IndexTable.Cell>
+                  <IndexTable.Cell>
+                    <Text as="span" variant="bodySm" tone="subdued">
+                      {product.updatedAtShopify
+                        ? new Date(product.updatedAtShopify).toLocaleString()
+                        : "—"}
+                    </Text>
+                  </IndexTable.Cell>
+                </IndexTable.Row>
+              ))}
+            </IndexTable>
+          )}
       </Card>
     </Layout.Section>
   );
@@ -652,12 +679,15 @@ function SnapshotJobsTab() {
           )}
           {!runsQuery.isLoading && allRuns.length > 0 && (
             <IndexTable
-              resourceName={{ singular: "snapshot run", plural: "snapshot runs" }}
+              resourceName={{
+                singular: "snapshot run",
+                plural: "snapshot runs",
+              }}
               itemCount={allRuns.length}
               headings={[
                 { title: "ID" },
                 { title: "Started At" },
-                { title: "Status" },
+                { title: "Status" }, // or "State" if you prefer
               ]}
               selectedItemsCount={0}
               onSelectionChange={() => {}}
@@ -671,14 +701,16 @@ function SnapshotJobsTab() {
                   <IndexTable.Cell>
                     <Badge
                       tone={
-                        run.status === "SUCCESS"
+                        run.state === "SUCCEEDED"
                           ? "success"
-                          : run.status === "FAILED"
+                          : run.state === "FAILED"
                           ? "critical"
-                          : "attention"
+                          : run.state === "RUNNING"
+                          ? "attention"
+                          : undefined
                       }
                     >
-                      {run.status}
+                      {run.state}
                     </Badge>
                   </IndexTable.Cell>
                 </IndexTable.Row>
@@ -698,20 +730,23 @@ function SnapshotJobsTab() {
 export default function ProductsIndexPage() {
   const tabs = [
     { id: "all", content: "All products", component: <AllProductsTab /> },
-    { id: "filtered", content: "Filtered products", component: <FilteredProductsTab /> },
-    { id: "snapshot", content: "Snapshot jobs", component: <SnapshotJobsTab /> },
+    {
+      id: "filtered",
+      content: "Filtered products",
+      component: <FilteredProductsTab />,
+    },
+    {
+      id: "snapshot",
+      content: "Snapshot jobs",
+      component: <SnapshotJobsTab />,
+    },
   ];
 
   const [selectedTab, setSelectedTab] = useState(0);
 
   return (
     <Page fullWidth title="Products">
-      <Tabs
-        tabs={tabs}
-        selected={selectedTab}
-        onSelect={setSelectedTab}
-        fitted
-      >
+      <Tabs tabs={tabs} selected={selectedTab} onSelect={setSelectedTab} fitted>
         {tabs[selectedTab].component}
       </Tabs>
     </Page>

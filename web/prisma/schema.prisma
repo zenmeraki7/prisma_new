@@ -38,27 +38,28 @@ enum BulkJobState {
    ===================== */
 
 model Shop {
-  id                 String   @id @default(cuid())
-  shopDomain         String   @unique
-  accessToken        String
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  id          String   @id @default(cuid())
+  shopDomain  String   @unique
+  accessToken String
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   // FAST plane
-  productLites       ProductLite[]
-  fastSyncState      FastSyncState?
+  productLites   ProductLite[]
+  fastSyncState  FastSyncState?
 
   // SNAPSHOT plane
-  snapshotRuns       SnapshotRun[]
-  snapshotProducts   SnapshotProduct[]
-  snapshotEvents     SnapshotRunEvent[]
+  snapshotRuns     SnapshotRun[]
+  snapshotProducts SnapshotProduct[]
+  snapshotEvents   SnapshotRunEvent[]
 
   // Bulk jobs
-  bulkOpsJobs         BulkOpsJob[]
-  bulkOpsEvents       BulkOpsJobEvent[]
+  bulkOpsJobs   BulkOpsJob[]
+  bulkOpsEvents BulkOpsJobEvent[]
 
   // Idempotency
-  idempotencyLedger  IdempotencyLedger[]
+  idempotencyLedger IdempotencyLedger[]
 }
 
 /* =====================
@@ -66,20 +67,21 @@ model Shop {
    ===================== */
 
 model ProductLite {
-  id                String
-  shopId            String
-  title             String
-  handle            String
-  status            String
-  vendor            String?
-  productType       String?
-  hasImages         Boolean   @default(false)
-  updatedAtShopify  DateTime?
+  /// Shopify Product GID
+  id               String
+  shopId           String
+  title            String
+  handle           String
+  status           String
+  vendor           String?
+  productType      String?
+  hasImages        Boolean   @default(false)
+  updatedAtShopify DateTime?
 
-  shop              Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  tags              ProductTag[]
-  collections       ProductCollection[]
-  variantRollup     VariantRollup?
+  shop         Shop              @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  tags         ProductTag[]
+  collections  ProductCollection[]
+  variantRollup VariantRollup?
 
   @@id([shopId, id])
   @@index([shopId, status])
@@ -124,7 +126,7 @@ model VariantRollup {
 }
 
 model FastSyncState {
-  shopId         String   @id
+  shopId         String  @id
   fastReady      Boolean  @default(false)
   fastLastSyncAt DateTime?
   fastRevision   Int      @default(0)
@@ -140,19 +142,21 @@ model FastSyncState {
 model SnapshotRun {
   id            String        @id @default(cuid())
   shopId        String
+  shop          Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
   planHash      String
+  filterSummary String?
   state         SnapshotState @default(PENDING)
   progress      Int           @default(0)
   total         Int           @default(0)
   errorMessage  String?
-  filterSummary String?
+
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
   expiresAt     DateTime?
 
-  shop          Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  products      SnapshotProduct[]
   events        SnapshotRunEvent[]
+  products      SnapshotProduct[]
 
   @@index([shopId, planHash])
   @@index([shopId, createdAt])

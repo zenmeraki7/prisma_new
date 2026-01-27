@@ -39,6 +39,180 @@ async function testDbConnection() {
 }
 
 // ──────────────────────────────────────────────
+// Shared helpers
+// ──────────────────────────────────────────────
+
+/**
+ * Map your filter DSL (same shape used by productsByFilter) to a ProductLite where.
+ * This guarantees FAST plane and SNAPSHOT plane see exactly the same product set.
+ *
+ * @param {string} shopId
+ * @param {any} filterExpr
+ * @returns {import('@prisma/client').Prisma.ProductLiteWhereInput}
+ */
+function buildProductWhereFromFilter(shopId, filterExpr) {
+  /** @type {import('@prisma/client').Prisma.ProductLiteWhereInput} */
+  const where = { shopId };
+
+  if (filterExpr && filterExpr.type === "group" && Array.isArray(filterExpr.children)) {
+    for (const child of filterExpr.children) {
+      if (child.type !== "leaf") continue;
+
+      const { filterId, op, value } = child;
+
+      if (filterId === "product.status" && op === "eq") {
+        where.status = String(value).toUpperCase();
+      } else if (filterId === "product.vendor" && op === "contains") {
+        where.vendor = {
+          contains: String(value),
+          mode: "insensitive",
+        };
+      } else if (filterId === "product.productType" && op === "contains") {
+        where.productType = {
+          contains: String(value),
+          mode: "insensitive",
+        };
+      } else if (filterId === "product.tags" && op === "contains") {
+        // ProductTag join: some(tag contains value)
+        where.tags = {
+          some: {
+            tag: { contains: String(value), mode: "insensitive" },
+          },
+        };
+      } else if (filterId === "product.hasImages" && op === "eq") {
+        where.hasImages = Boolean(value);
+      } else if (filterId === "product.totalInventory" && op === "gte") {
+        // VariantRollup to-one relation: is.totalInventory.gte
+        where.variantRollup = {
+          is: {
+            totalInventory: { gte: Number(value) },
+          },
+        };
+      }
+    }
+  }
+
+  return where;
+}
+
+/**
+ * Real snapshot builder:
+ *  - Creates a SnapshotRun row
+ *  - Selects product IDs from FAST plane based on filter
+ *  - Inserts SnapshotProduct rows in batches
+ *  - Updates progress + events
+ *
+ * NOTE: this is synchronous in-process. For production you’ll move the inner loop
+ * into a BullMQ worker, but the semantics will stay the same.
+ */
+async function buildSnapshotForPlanHash({ shop, planHash, filterExpr, filterSummary }) {
+  // 1) Create run row in RUNNING / 0 progress
+  const run = await prisma.snapshotRun.create({
+    data: {
+      shopId: shop.id,
+      planHash,
+      filterSummary: filterSummary ?? null,
+      state: "RUNNING",
+      progress: 0,
+      total: 0,
+      errorMessage: null,
+    },
+  });
+
+  const runId = run.id;
+
+  async function logEvent(kind, message) {
+    await prisma.snapshotRunEvent.create({
+      data: {
+        shopId: shop.id,
+        snapshotRunId: runId,
+        kind,
+        message,
+      },
+    });
+  }
+
+  await logEvent("INFO", "Snapshot run started.");
+
+  try {
+    const where = buildProductWhereFromFilter(shop.id, filterExpr);
+
+    // 2) Count total matching products
+    const total = await prisma.productLite.count({ where });
+
+    await prisma.snapshotRun.update({
+      where: { id: runId },
+      data: { total },
+    });
+
+    await logEvent("INFO", `Planning snapshot for ${total} products.`);
+
+    // 3) Walk products in batches and insert membership rows
+    const pageSize = 500;
+    let processed = 0;
+    let offset = 0;
+
+    while (true) {
+      const batch = await prisma.productLite.findMany({
+        where,
+        orderBy: { updatedAtShopify: "desc" },
+        skip: offset,
+        take: pageSize,
+        select: {
+          id: true,
+          updatedAtShopify: true,
+        },
+      });
+
+      if (!batch.length) break;
+
+      await prisma.snapshotProduct.createMany({
+        data: batch.map((p) => ({
+          shopId: shop.id,
+          snapshotRunId: runId,
+          productId: p.id,
+          sortKey: p.updatedAtShopify ?? new Date(),
+        })),
+        skipDuplicates: true,
+      });
+
+      processed += batch.length;
+      offset += batch.length;
+
+      await prisma.snapshotRun.update({
+        where: { id: runId },
+        data: { progress: processed },
+      });
+
+      await logEvent("INFO", `Processed ${processed} of ${total} products.`);
+    }
+
+    await prisma.snapshotRun.update({
+      where: { id: runId },
+      data: { state: "SUCCEEDED" },
+    });
+
+    await logEvent("INFO", `Snapshot completed for ${total} products.`);
+
+    return await prisma.snapshotRun.findUnique({ where: { id: runId } });
+  } catch (err) {
+    console.error("❌ Snapshot run failed:", err);
+
+    await prisma.snapshotRun.update({
+      where: { id: runId },
+      data: {
+        state: "FAILED",
+        errorMessage: err.message ?? "Snapshot failed",
+      },
+    });
+
+    await logEvent("ERROR", err.message ?? "Snapshot failed with unknown error.");
+
+    throw err;
+  }
+}
+
+// ──────────────────────────────────────────────
 // Shopify authentication + webhooks
 // ──────────────────────────────────────────────
 app.get(shopify.config.auth.path, shopify.auth.begin());
@@ -58,7 +232,7 @@ app.post(
 app.use("/api/*", shopify.validateAuthenticatedSession());
 
 // ──────────────────────────────────────────────
-// GRAPHQL API
+// GRAPHQL API (string-dispatch style)
 // ──────────────────────────────────────────────
 app.post("/api/graphql", async (req, res) => {
   try {
@@ -86,7 +260,7 @@ app.post("/api/graphql", async (req, res) => {
         variables?.input?.filter ??
         null;
 
-      const executionMode = "FAST_ONLY";
+      const executionMode = "FAST_ONLY"; // currently no SNAPSHOT planner wiring
       const planHash = filter
         ? Buffer.from(JSON.stringify(filter))
             .toString("base64")
@@ -181,7 +355,7 @@ app.post("/api/graphql", async (req, res) => {
         const after = variables?.after ?? null;
 
         console.log(
-          `🔄 Syncing products: first=${first}, after=${after}, shopDomain=${shopDomain}`,
+          `🔄 syncProductsToDb: first=${first}, after=${after}, shopDomain=${shopDomain}`,
         );
 
         // Ensure Shop record exists first
@@ -197,7 +371,17 @@ app.post("/api/graphql", async (req, res) => {
           },
         });
 
-        console.log(`✅ Shop record ensured for ${shopDomain}`);
+        console.log(`✅ Shop row ensured for ${shopDomain}`);
+
+        const shop = await prisma.shop.findUnique({
+          where: { shopDomain },
+        });
+
+        if (!shop) {
+          throw new Error("Shop record not found after upsert");
+        }
+
+        console.log(`🔑 Using shop.id=${shop.id} for foreign key`);
 
         const shopifyQuery = `
           query SyncProducts($first: Int!, $after: String) {
@@ -243,23 +427,11 @@ app.post("/api/graphql", async (req, res) => {
 
         console.log(`📦 Fetched ${edges.length} products from Shopify`);
 
-        // Get the Shop record ID to use as foreign key
-        const shop = await prisma.shop.findUnique({
-          where: { shopDomain },
-        });
-
-        if (!shop) {
-          throw new Error("Shop record not found after upsert");
-        }
-
-        console.log(`🔑 Using shop.id=${shop.id} for foreign key`);
-
         // Save to database
         for (const edge of edges) {
           const p = edge.node;
 
           try {
-            // Upsert ProductLite using shop.id as foreign key
             await prisma.productLite.upsert({
               where: {
                 shopId_id: {
@@ -293,7 +465,7 @@ app.post("/api/graphql", async (req, res) => {
               },
             });
 
-            // ───────── VariantRollup rollups (totalInventory) ─────────
+            // VariantRollup rollups (totalInventory)
             const variants = p.variants?.edges?.map((e) => e.node) ?? [];
 
             const totalInventory = variants.reduce((sum, v) => {
@@ -321,7 +493,7 @@ app.post("/api/graphql", async (req, res) => {
               },
             });
 
-            // ───────── tags ─────────
+            // tags
             if (p.tags && p.tags.length > 0) {
               await prisma.productTag.deleteMany({
                 where: { shopId: shop.id, productId: p.id },
@@ -336,7 +508,6 @@ app.post("/api/graphql", async (req, res) => {
                 skipDuplicates: true,
               });
             } else {
-              // Remove all tags if product has none
               await prisma.productTag.deleteMany({
                 where: { shopId: shop.id, productId: p.id },
               });
@@ -368,7 +539,7 @@ app.post("/api/graphql", async (req, res) => {
           },
         });
       } catch (syncError) {
-        console.error("❌ Sync error details:", syncError);
+        console.error("❌ syncProductsToDb error:", syncError);
         return res.status(500).json({
           errors: [
             {
@@ -384,7 +555,7 @@ app.post("/api/graphql", async (req, res) => {
       }
     }
 
-    // ───────────────── productsByFilter ─────────────────
+    // ───────────────── productsByFilter (FAST plane) ─────────────────
     if (query.includes("productsByFilter")) {
       try {
         const input = variables?.input || {};
@@ -398,7 +569,6 @@ app.post("/api/graphql", async (req, res) => {
           filterExpr: JSON.stringify(filterExpr, null, 2),
         });
 
-        // Get the Shop record to use correct ID
         const shop = await prisma.shop.findUnique({
           where: { shopDomain },
         });
@@ -416,60 +586,7 @@ app.post("/api/graphql", async (req, res) => {
           });
         }
 
-        console.log(`✅ Found shop: ${shop.id}`);
-
-        // Build Prisma where clause from FilterExpr
-        /** @type {import('@prisma/client').Prisma.ProductLiteWhereInput} */
-        const where = { shopId: shop.id };
-
-        if (filterExpr && filterExpr.type === "group" && filterExpr.children) {
-          console.log(
-            `📋 Processing ${filterExpr.children.length} filter children`,
-          );
-
-          for (const child of filterExpr.children) {
-            if (child.type !== "leaf") continue;
-
-            const { filterId, op, value } = child;
-
-            console.log(
-              `  - Filter: ${filterId} ${op} ${JSON.stringify(value)}`,
-            );
-
-            if (filterId === "product.status" && op === "eq") {
-              where.status = String(value).toUpperCase();
-            } else if (filterId === "product.vendor" && op === "contains") {
-              where.vendor = {
-                contains: String(value),
-                mode: "insensitive",
-              };
-            } else if (
-              filterId === "product.productType" &&
-              op === "contains"
-            ) {
-              where.productType = {
-                contains: String(value),
-                mode: "insensitive",
-              };
-            } else if (filterId === "product.tags" && op === "contains") {
-              // ProductTag join: some(tag contains value)
-              where.tags = {
-                some: {
-                  tag: { contains: String(value), mode: "insensitive" },
-                },
-              };
-            } else if (filterId === "product.hasImages" && op === "eq") {
-              where.hasImages = Boolean(value);
-            } else if (filterId === "product.totalInventory" && op === "gte") {
-              // VariantRollup to-one relation: is.totalInventory.gte
-              where.variantRollup = {
-                is: {
-                  totalInventory: { gte: Number(value) },
-                },
-              };
-            }
-          }
-        }
+        const where = buildProductWhereFromFilter(shop.id, filterExpr);
 
         console.log(
           `🔎 Prisma where clause:`,
@@ -529,7 +646,216 @@ app.post("/api/graphql", async (req, res) => {
       }
     }
 
-    // ───────────────── snapshotRuns ─────────────────
+    // ───────────────── triggerSnapshotRun (build real snapshot) ─────────────────
+    if (query.includes("triggerSnapshotRun")) {
+      const planHash = variables?.planHash;
+      const filterExpr = variables?.filterJson ?? null;
+      const filterSummary = variables?.filterSummary ?? null;
+
+      if (!planHash || typeof planHash !== "string") {
+        return res
+          .status(400)
+          .json({ errors: [{ message: "planHash is required" }] });
+      }
+
+      const shop = await prisma.shop.findUnique({
+        where: { shopDomain },
+      });
+
+      if (!shop) {
+        return res.status(400).json({
+          errors: [{ message: `No Shop row found for ${shopDomain}` }],
+        });
+      }
+
+      const run = await buildSnapshotForPlanHash({
+        shop,
+        planHash,
+        filterExpr,
+        filterSummary,
+      });
+
+      return res.json({
+        data: {
+          triggerSnapshotRun: run,
+        },
+      });
+    }
+
+    // ───────────────── snapshotStatus ─────────────────
+    if (query.includes("snapshotStatus")) {
+      const planHash = variables?.planHash;
+      if (!planHash || typeof planHash !== "string") {
+        return res
+          .status(400)
+          .json({ errors: [{ message: "planHash is required" }] });
+      }
+
+      const shop = await prisma.shop.findUnique({
+        where: { shopDomain },
+      });
+
+      if (!shop) {
+        return res.json({
+          data: {
+            snapshotStatus: {
+              state: "PENDING",
+              progress: 0,
+              total: 0,
+              errorMessage: null,
+              filterSummary: null,
+              planHash,
+              snapshotRunId: null,
+            },
+          },
+        });
+      }
+
+      const latestRun = await prisma.snapshotRun.findFirst({
+        where: { shopId: shop.id, planHash },
+        orderBy: { createdAt: "desc" },
+      });
+
+      if (!latestRun) {
+        return res.json({
+          data: {
+            snapshotStatus: {
+              state: "PENDING",
+              progress: 0,
+              total: 0,
+              errorMessage: null,
+              filterSummary: null,
+              planHash,
+              snapshotRunId: null,
+            },
+          },
+        });
+      }
+
+      return res.json({
+        data: {
+          snapshotStatus: {
+            state: latestRun.state,
+            progress: latestRun.progress,
+            total: latestRun.total,
+            errorMessage: latestRun.errorMessage,
+            filterSummary: latestRun.filterSummary,
+            planHash: latestRun.planHash,
+            snapshotRunId: latestRun.id,
+          },
+        },
+      });
+    }
+
+    // ───────────────── productsBySnapshot ─────────────────
+    if (query.includes("productsBySnapshot")) {
+      const planHash = variables?.planHash;
+      const first = Number(variables?.first ?? 50);
+      const after = variables?.after ?? null;
+
+      if (!planHash || typeof planHash !== "string") {
+        return res
+          .status(400)
+          .json({ errors: [{ message: "planHash is required" }] });
+      }
+
+      const shop = await prisma.shop.findUnique({
+        where: { shopDomain },
+      });
+
+      if (!shop) {
+        return res.json({
+          data: {
+            productsBySnapshot: {
+              items: [],
+              nextCursor: null,
+              snapshotRunId: null,
+            },
+          },
+        });
+      }
+
+      const latestRun = await prisma.snapshotRun.findFirst({
+        where: { shopId: shop.id, planHash },
+        orderBy: { createdAt: "desc" },
+      });
+
+      if (!latestRun) {
+        return res.json({
+          data: {
+            productsBySnapshot: {
+              items: [],
+              nextCursor: null,
+              snapshotRunId: null,
+            },
+          },
+        });
+      }
+
+      const offset = after ? parseInt(after, 10) : 0;
+
+      const memberships = await prisma.snapshotProduct.findMany({
+        where: {
+          shopId: shop.id,
+          snapshotRunId: latestRun.id,
+        },
+        orderBy: { sortKey: "desc" },
+        skip: offset,
+        take: first,
+        select: {
+          productId: true,
+        },
+      });
+
+      if (!memberships.length) {
+        return res.json({
+          data: {
+            productsBySnapshot: {
+              items: [],
+              nextCursor: null,
+              snapshotRunId: latestRun.id,
+            },
+          },
+        });
+      }
+
+      const productIds = memberships.map((m) => m.productId);
+
+      const products = await prisma.productLite.findMany({
+        where: {
+          shopId: shop.id,
+          id: { in: productIds },
+        },
+        include: { tags: true },
+      });
+
+      const items = products.map((item) => ({
+        id: item.id,
+        title: item.title,
+        handle: item.handle,
+        status: item.status,
+        vendor: item.vendor,
+        productType: item.productType,
+        tags: item.tags.map((t) => t.tag),
+        hasImages: item.hasImages,
+        updatedAtShopify: item.updatedAtShopify,
+      }));
+
+      const nextCursor =
+        memberships.length === first ? String(offset + memberships.length) : null;
+
+      return res.json({
+        data: {
+          productsBySnapshot: {
+            items,
+            nextCursor,
+            snapshotRunId: latestRun.id,
+          },
+        },
+      });
+    }
+
+    // ───────────────── snapshotRuns (connection style for SnapshotJobsPage) ─────────────────
     if (query.includes("snapshotRuns")) {
       const first = Number(variables?.first ?? 25);
       const after = variables?.after ?? null;
@@ -539,39 +865,52 @@ app.post("/api/graphql", async (req, res) => {
       });
 
       if (!shop) {
+        console.log("⚠️ No Shop row for domain", shopDomain);
         return res.json({
           data: {
             snapshotRuns: {
-              runs: [],
-              nextCursor: null,
+              edges: [],
+              pageInfo: {
+                hasNextPage: false,
+                endCursor: null,
+              },
             },
           },
         });
       }
 
+      const offset = after ? parseInt(after, 10) : 0;
+
       const runs = await prisma.snapshotRun.findMany({
         where: { shopId: shop.id },
         orderBy: { createdAt: "desc" },
         take: first,
-        skip: after ? parseInt(after, 10) : 0,
+        skip: offset,
       });
 
-      const nextCursor =
-        runs.length === first
-          ? String((after ? parseInt(after, 10) : 0) + first)
-          : null;
+      const edges = runs.map((run, idx) => ({
+        cursor: String(offset + idx + 1),
+        node: run,
+      }));
+
+      const hasNextPage = runs.length === first;
+      const endCursor = hasNextPage ? String(offset + runs.length) : null;
 
       return res.json({
         data: {
           snapshotRuns: {
-            runs,
-            nextCursor,
+            edges,
+            pageInfo: {
+              hasNextPage,
+              endCursor,
+            },
           },
         },
       });
     }
 
-    // ───────────────── snapshotRunEvents ─────────────────
+    // ───────────────── snapshotRunEvents (connection style for modal) ─────────────────
+       // ───────────────── snapshotRunEvents (supports both simple + connection shapes) ─────────────────
     if (query.includes("snapshotRunEvents")) {
       const runId = variables?.runId;
       if (!runId) {
@@ -588,31 +927,58 @@ app.post("/api/graphql", async (req, res) => {
       });
 
       if (!shop) {
+        console.log("⚠️ No Shop row for domain", shopDomain);
         return res.json({
           data: {
-            snapshotRunEvents: { events: [], nextCursor: null },
+            snapshotRunEvents: {
+              // simple shape
+              events: [],
+              nextCursor: null,
+              // connection shape
+              edges: [],
+              pageInfo: {
+                hasNextPage: false,
+                endCursor: null,
+              },
+            },
           },
         });
       }
+
+      const offset = after ? parseInt(after, 10) : 0;
 
       const events = await prisma.snapshotRunEvent.findMany({
         where: { snapshotRunId: runId, shopId: shop.id },
         orderBy: { createdAt: "desc" },
         take: first,
-        skip: after ? parseInt(after, 10) : 0,
+        skip: offset,
       });
 
-      const nextCursor =
-        events.length === first
-          ? String((after ? parseInt(after, 10) : 0) + first)
-          : null;
+      const edges = events.map((ev, idx) => ({
+        cursor: String(offset + idx + 1),
+        node: ev,
+      }));
+
+      const hasNextPage = events.length === first;
+      const endCursor = hasNextPage ? String(offset + events.length) : null;
 
       return res.json({
         data: {
-          snapshotRunEvents: { events, nextCursor },
+          snapshotRunEvents: {
+            // simple shape
+            events,
+            nextCursor: endCursor,
+            // connection shape
+            edges,
+            pageInfo: {
+              hasNextPage,
+              endCursor,
+            },
+          },
         },
       });
     }
+
 
     // ───────────────── unknown operation ─────────────────
     return res
@@ -627,7 +993,7 @@ app.post("/api/graphql", async (req, res) => {
 });
 
 // ──────────────────────────────────────────────
-// REST endpoints
+// REST endpoints (from template)
 // ──────────────────────────────────────────────
 app.get("/api/products/count", async (_req, res) => {
   try {

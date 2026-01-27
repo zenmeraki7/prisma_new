@@ -104,10 +104,7 @@ const SNAPSHOT_RUN_EVENTS_QUERY = `
 export async function snapshotRunsRequest(
   app: AppBridgeState,
   params: { first: number; after?: string | null }
-): Promise<{
-  runs: SnapshotRunDto[];
-  nextCursor: string | null;
-}> {
+): Promise<{ runs: SnapshotRunDto[]; nextCursor: string | null }> {
   const res = await graphqlRequest<SnapshotRunsResponse>(
     app,
     SNAPSHOT_RUNS_QUERY,
@@ -131,10 +128,7 @@ export async function snapshotRunsRequest(
 export async function snapshotRunEventsRequest(
   app: AppBridgeState,
   params: { runId: string; first: number; after?: string | null }
-): Promise<{
-  events: SnapshotRunEventDto[];
-  nextCursor: string | null;
-}> {
+): Promise<{ events: SnapshotRunEventDto[]; nextCursor: string | null }> {
   const res = await graphqlRequest<SnapshotRunEventsResponse>(
     app,
     SNAPSHOT_RUN_EVENTS_QUERY,
