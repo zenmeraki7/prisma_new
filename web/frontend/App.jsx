@@ -21,7 +21,7 @@ export default function App() {
             <a href="/" rel="home" />
 
             <a href="products">{t("NavigationMenu.Products")}</a>
-            <a href="filteredProductspage">{t("NavigationMenu.FilteredProductsPage")}</a>
+            {/* <a href="filteredProductspage">{t("NavigationMenu.FilteredProductsPage")}</a> */}
             <a href="productsindexPage">{t("NavigationMenu.ProductsIndexPage")}</a>
             <a href="snapshotjobspage">{t("NavigationMenu.SnapshotJobsPage")}</a>
             <a href="/History">

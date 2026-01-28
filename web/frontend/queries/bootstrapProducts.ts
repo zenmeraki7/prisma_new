@@ -1,4 +1,3 @@
-// web/frontend/queries/bootstrapProducts.ts
 import type { AppBridgeState } from "@shopify/app-bridge-react";
 import { graphqlRequest } from "../../lib/graphqlClient";
 import type { ProductLiteDto } from "../types/product";
@@ -16,7 +15,6 @@ export type BootstrapProductsPageDto = {
   nextCursor: string | null;
 };
 
-
 type BootstrapProductsResponse = {
   bootstrapProducts: {
     status: BootstrapStatusDto;
@@ -28,8 +26,8 @@ type BootstrapProductsResponse = {
 };
 
 const BOOTSTRAP_PRODUCTS_QUERY = `
-  query BootstrapProducts($first: Int!, $after: String) {
-    bootstrapProducts(first: $first, after: $after) {
+  query BootstrapProducts($first: Int!, $after: String, $search: String) {
+    bootstrapProducts(first: $first, after: $after, search: $search) {
       status {
         fastReady
         fastLastSyncAt
@@ -56,7 +54,7 @@ const BOOTSTRAP_PRODUCTS_QUERY = `
 
 export async function bootstrapProductsRequest(
   app: AppBridgeState,
-  params: { first: number; after?: string | null }
+  params: { first: number; after?: string | null; search?: string },
 ): Promise<BootstrapProductsPageDto> {
   const res = await graphqlRequest<BootstrapProductsResponse>(
     app,
@@ -64,7 +62,8 @@ export async function bootstrapProductsRequest(
     {
       first: params.first,
       after: params.after ?? null,
-    }
+      search: params.search ?? null,
+    },
   );
 
   return {
@@ -73,5 +72,5 @@ export async function bootstrapProductsRequest(
     nextCursor: res.bootstrapProducts.page.nextCursor,
   };
 }
-// ✅ Export the type here
+
 export type { ProductLiteDto };
