@@ -7,7 +7,6 @@ import { productsByFilterResolver } from "./filtering/productsByFilterResolver.j
 import {
   snapshotStatusResolver,
   productsBySnapshotResolver,
-  snapshotResolvers,  // ADD THIS
 } from "./snapshots/resolvers.js";
 
 import {
@@ -170,17 +169,6 @@ const typeDefs = /* GraphQL */ `
     mismatchedProductIds: [ID!]
   }
 
-  # ADD THIS: Export types
-  type CreateSnapshotResult {
-    snapshotRunId: ID!
-    reused: Boolean!
-  }
-
-  type ExportResult {
-    data: String!
-    filename: String!
-  }
-
   type Query {
     bootstrapProducts(first: Int! = 25, after: String): BootstrapProductsPayload!
     planFilter(input: PlanFilterInput!): PlanFilterPayload!
@@ -190,12 +178,6 @@ const typeDefs = /* GraphQL */ `
     snapshotRuns(first: Int! = 25, after: String): SnapshotRunConnection!
     snapshotRunEvents(runId: ID!, first: Int! = 50, after: String): SnapshotRunEventConnection!
     debugVerifySnapshot(planHash: String!): DebugVerifySnapshotPayload!
-  }
-
-  # ADD THIS: Mutation type
-  type Mutation {
-    createSnapshot(productIds: [String!]!): CreateSnapshotResult!
-    downloadExport(snapshotRunId: ID!, format: String!): ExportResult!
   }
 `;
 
@@ -267,12 +249,6 @@ const resolvers = {
     snapshotRunEvents: snapshotRunEventsResolver,
 
     debugVerifySnapshot: debugVerifySnapshotResolver,
-  },
-
-  // ADD THIS: Mutations
-  Mutation: {
-    createSnapshot: snapshotResolvers.Mutation.createSnapshot,
-    downloadExport: snapshotResolvers.Mutation.downloadExport,
   },
 };
 

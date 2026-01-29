@@ -1,30 +1,18 @@
 // web/graphql/snapshots/resolvers.ts
 import { prisma } from "../../db/prisma.js";
-import type { GraphQLContext } from "../schema.js";
 
-// Import export functions
-import { createSnapshot } from "../mutation/createSnapshot.js";
-import { generateCSV, generateJSON } from "../../lib/exportGenerator.js";
+import type { GraphQLContext } from "../schema.js"; // adjust path if needed
 
-// Type definitions for existing resolver arguments
+// SnapshotStatus resolver
 type SnapshotStatusArgs = {
   planHash: string;
 };
 
+// productsBySnapshot resolver
 type ProductsBySnapshotArgs = {
   planHash: string;
   first?: number;
   after?: string | null;
-};
-
-// Type definitions for new export resolver arguments
-type CreateSnapshotArgs = {
-  productIds: string[];
-};
-
-type DownloadExportArgs = {
-  snapshotRunId: string;
-  format: string;
 };
 
 type SnapshotCursorPayload = {
@@ -56,7 +44,6 @@ function clampFirst(raw: number | undefined): number {
   return Math.min(Math.max(n, 1), 200);
 }
 
-// EXISTING RESOLVER: snapshotStatus
 export async function snapshotStatusResolver(
   _parent: unknown,
   args: SnapshotStatusArgs,
@@ -93,7 +80,6 @@ export async function snapshotStatusResolver(
   };
 }
 
-// EXISTING RESOLVER: productsBySnapshot
 export async function productsBySnapshotResolver(
   _parent: unknown,
   args: ProductsBySnapshotArgs,
@@ -187,55 +173,3 @@ export async function productsBySnapshotResolver(
     snapshotRunId: run.id,
   };
 }
-
-// NEW: Export mutations object
-export const snapshotResolvers = {
-  Mutation: {
-    // Create snapshot from product IDs
-    createSnapshot: async (
-      _parent: unknown,
-      args: CreateSnapshotArgs,
-      ctx: GraphQLContext
-    ) => {
-      const { productIds } = args;
-      const { shopId } = ctx;
-
-      const result = await createSnapshot(shopId, productIds);
-      return result;
-    },
-
-    // Download export
-    downloadExport: async (
-      _parent: unknown,
-      args: DownloadExportArgs,
-      ctx: GraphQLContext
-    ) => {
-      const { snapshotRunId, format } = args;
-      const { shopId } = ctx;
-
-      const snapshot = await prisma.snapshotRun.findUnique({
-        where: { id: snapshotRunId },
-      });
-
-      if (!snapshot || snapshot.shopId !== shopId) {
-        throw new Error("Snapshot not found");
-      }
-
-      if (snapshot.state !== "SUCCEEDED") {
-        throw new Error("Snapshot not ready");
-      }
-
-      let data: string;
-      if (format === "csv") {
-        data = await generateCSV(snapshotRunId, shopId);
-      } else {
-        data = await generateJSON(snapshotRunId, shopId);
-      }
-
-      return {
-        data,
-        filename: `export-${snapshotRunId}.${format}`,
-      };
-    },
-  },
-};

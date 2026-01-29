@@ -3,7 +3,7 @@ import { prisma } from "../../db/prisma.js";
 import type { GraphQLContext } from "../schema.js";
 
 // Import export functions
-import { createSnapshot } from "../mutation/createSnapshot.js";
+import { createSnapshot } from "../../mutations/createSnapshot.js";
 import { generateCSV, generateJSON } from "../../lib/exportGenerator.js";
 
 // Type definitions for existing resolver arguments
