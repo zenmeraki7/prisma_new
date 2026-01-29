@@ -1,117 +1,44 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+// web/frontend/hooks/useBootstrapProducts.ts
+import { useInfiniteQuery, type UseInfiniteQueryResult } from "@tanstack/react-query";
 import { useAppBridge } from "@shopify/app-bridge-react";
+import type { AppBridgeState } from "@shopify/app-bridge-react";
+
 import {
   bootstrapProductsRequest,
-  type ProductLiteDto,
-  type BootstrapStatusDto,
+  type BootstrapProductsPageDto,
 } from "../queries/bootstrapProducts";
 
-type State = {
-  loading: boolean;
-  error?: string | null;
-  products: ProductLiteDto[];
-  status?: BootstrapStatusDto;
-  nextCursor?: string | null;
-};
+/**
+ * Central FAST-plane products fetcher.
+ *
+ * - Fetches ProductLiteDto pages via bootstrapProductsRequest
+ * - Supports a simple "search" string that backend may use
+ */
+export function useBootstrapProducts(
+  search: string | null,
+): UseInfiniteQueryResult<BootstrapProductsPageDto, Error> {
+  const app = useAppBridge() as AppBridgeState | undefined;
 
-const DEFAULT_PAGE_SIZE = 25;
+  return useInfiniteQuery<
+    BootstrapProductsPageDto,
+    Error,
+    BootstrapProductsPageDto,
+    ["bootstrapProducts", { search: string | null }],
+    string | null
+  >({
+    queryKey: ["bootstrapProducts", { search }],
+    enabled: !!app, // do nothing until AppBridge is ready
+    initialPageParam: null,
+    queryFn: async ({ pageParam }) => {
+      if (!app) throw new Error("AppBridge not ready");
 
-function normalizeError(err: unknown): string {
-  if (!err) return "Unknown error";
-  if (typeof err === "string") return err;
-  const anyErr = err as any;
-  return anyErr?.message ?? String(err);
-}
-
-export function useBootstrapProducts() {
-  const app = useAppBridge();
-
-  const [state, setState] = useState<State>({
-    loading: true,
-    products: [],
-    error: null,
-  });
-
-  const inFlightRef = useRef(false);
-  const didInitRef = useRef(false);
-
-  const fetchPage = useCallback(
-    async (opts: { after?: string | null; append: boolean }) => {
-      if (!app || inFlightRef.current) return;
-      inFlightRef.current = true;
-
-      setState((prev) => ({
-        ...prev,
-        loading: true,
-        error: null,
-      }));
-
-      try {
-        const payload = await bootstrapProductsRequest(app, {
-          first: DEFAULT_PAGE_SIZE,
-          after: opts.after ?? null,
-        });
-
-        setState((prev) => ({
-          loading: false,
-          error: null,
-          status: payload.status,
-          products: opts.append
-            ? [...prev.products, ...payload.items]
-            : payload.items,
-          nextCursor: payload.nextCursor ?? null,
-        }));
-      } catch (e) {
-        setState((prev) => ({
-          ...prev,
-          loading: false,
-          error: normalizeError(e),
-        }));
-      } finally {
-        inFlightRef.current = false;
-      }
+      return bootstrapProductsRequest(app, {
+        first: 50,
+        after: pageParam ?? null,
+        // backend can optionally use this search param
+        search: search ?? undefined,
+      });
     },
-    [app]
-  );
-
-  const loadInitial = useCallback(() => {
-    fetchPage({ append: false });
-  }, [fetchPage]);
-
-  const loadMore = useCallback(() => {
-    if (state.loading || !state.nextCursor) return;
-    fetchPage({ after: state.nextCursor, append: true });
-  }, [fetchPage, state.loading, state.nextCursor]);
-
-  // ✅ StrictMode-safe initial load
-  useEffect(() => {
-    if (!app) return;
-    if (didInitRef.current) return;
-    didInitRef.current = true;
-    loadInitial();
-  }, [app, loadInitial]);
-
-  const syncState = useMemo(() => {
-    if (!state.status) {
-      return { state: "unknown" as const, label: "Loading sync status…" };
-    }
-    if (state.status.fastReady) {
-      return { state: "ready" as const, label: "FAST plane ready" };
-    }
-    if (state.status.syncEnqueued) {
-      return { state: "syncing" as const, label: "Initial sync is running…" };
-    }
-    return { state: "cold" as const, label: "FAST plane not ready yet" };
-  }, [state.status]);
-
-  return {
-    loading: state.loading,
-    error: state.error,
-    products: state.products,
-    status: state.status,
-    nextCursor: state.nextCursor,
-    syncState,
-    reload: loadInitial,
-    loadMore,
-  };
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? null,
+  });
 }
