@@ -1,238 +1,202 @@
-import React, { useMemo } from "react";
+// web/frontend/pages/ProductsPage.tsx
+import React, { useMemo, useState, useCallback } from "react";
+import { Page, Layout } from "@shopify/polaris";
+
+import type { ProductLiteDto } from "../queries/bootstrapProducts";
+import { useBootstrapProducts } from "../hooks/useBootstrapProducts";
+
 import {
-  Page,
-  Layout,
-  Card,
-  Text,
-  IndexTable,
-  useIndexResourceState,
-  Badge,
-  Box,
-  InlineStack,
-  Spinner,
-  Banner,
-} from "@shopify/polaris";
-import { useAppBridge } from "@shopify/app-bridge-react";
-import {
-  useInfiniteQuery,
-  type UseInfiniteQueryResult,
-  type QueryFunctionContext,
-} from "@tanstack/react-query";
+  PRODUCT_FIELDS,
+  VARIANT_FIELDS,
+  filterPredicate,
+  type AppliedFilter,
+} from "../lib/products/filters";
+import type { FilterFieldGroup } from "../lib/filters/registry";
 
-import type { AppBridgeState } from "@shopify/app-bridge-react";
-import {
-  bootstrapProductsRequest,
-  type ProductLiteDto,
-  type BootstrapProductsPageDto,
-} from "../queries/bootstrapProducts";
+import { FastStatusCard } from "../components/products/FastStatusCard";
+import { ProductsFiltersCard } from "../components/products/ProductsFiltersCard";
+import { ProductsTable } from "../components/products/ProductsTable";
+import { FilterBuilder } from "../components/products/FilterBuilderModal";
 
-/* ----------------------- */
-/* React Query data hook   */
-/* ----------------------- */
-function useBootstrapProducts(
-  app: AppBridgeState | undefined,
-): UseInfiniteQueryResult<BootstrapProductsPageDto, Error> {
-  return useInfiniteQuery<
-    BootstrapProductsPageDto,
-    Error,
-    BootstrapProductsPageDto,
-    ["bootstrapProducts"],
-    string | null
-  >({
-    queryKey: ["bootstrapProducts"],
-    enabled: !!app,
-    initialPageParam: null,
-    queryFn: async ({
-      pageParam,
-    }: QueryFunctionContext<["bootstrapProducts"], string | null>) => {
-      if (!app) throw new Error("AppBridge not ready");
-
-      return bootstrapProductsRequest(app, {
-        first: 50,
-        after: pageParam,
-      });
-    },
-    getNextPageParam: (lastPage) =>
-      lastPage.nextCursor ?? null,
-  });
-}
-
-/* ----------------------- */
-/* Page component          */
-/* ----------------------- */
 export default function ProductsPage() {
-  const app = useAppBridge();
-  const query = useBootstrapProducts(app);
+  // Search (top bar)
+  const [searchInput, setSearchInput] = useState<string>("");
+  const [searchTerm, setSearchTerm] = useState<string | null>(null);
 
-  const status = query.data?.pages[0]?.status;
+  // Sort
+  const [sortBy, setSortBy] = useState<string>("sort");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
 
-  const allItems: ProductLiteDto[] = useMemo(() => {
-    if (!query.data) return [];
-    return query.data.pages.flatMap((p) => p.items);
-  }, [query.data]);
+  // Filters
+  const [appliedFilters, setAppliedFilters] = useState<AppliedFilter[]>([]);
 
-  const resourceName = {
-    singular: "product",
-    plural: "products",
-  };
+  // Filter Builder modal
+  const [filterBuilderOpen, setFilterBuilderOpen] = useState(false);
 
-  const { selectedResources, allResourcesSelected, handleSelectionChange } =
-    useIndexResourceState(allItems, {
-      resourceIDResolver: (product) => product.id,
-    });
+  // FAST-plane query
+  const query = useBootstrapProducts(searchTerm);
+  const fastStatus = query.data?.pages[0]?.status;
 
   const loadingInitial = query.isLoading;
   const loadingMore = query.isFetchingNextPage;
 
+  /* ----------------------- */
+  /* Search & sort helpers   */
+  /* ----------------------- */
+
+  const handleSearchClick = useCallback(() => {
+    const trimmed = searchInput.trim();
+    setSearchTerm(trimmed.length > 0 ? trimmed : null);
+  }, [searchInput]);
+
+  const handleClearAll = useCallback(() => {
+    setSearchInput("");
+    setSearchTerm(null);
+    setAppliedFilters([]);
+    setSortBy("sort");
+    setSortDirection("desc");
+  }, []);
+
+  const handleSortByChange = useCallback((value: string) => setSortBy(value), []);
+  const handleSortDirectionChange = useCallback(
+    (value: "asc" | "desc") => setSortDirection(value),
+    [],
+  );
+
+  /* ----------------------- */
+  /* Data: filtered + sorted */
+  /* ----------------------- */
+
+  const allItems: ProductLiteDto[] = useMemo(() => {
+    if (!query.data) return [];
+    const raw = query.data.pages.flatMap((p) => p.items);
+
+    // main search term: match vendor OR title OR handle (extra safety;
+    // backend can also use search)
+    let result = raw;
+    if (searchTerm && searchTerm.trim() !== "") {
+      const needle = searchTerm.toLowerCase();
+      result = result.filter((p) => {
+        const vendor = (p.vendor ?? "").toLowerCase();
+        const title = (p.title ?? "").toLowerCase();
+        const handle = (p.handle ?? "").toLowerCase();
+        return (
+          vendor.includes(needle) ||
+          title.includes(needle) ||
+          handle.includes(needle)
+        );
+      });
+    }
+
+    // applied filters (client-side)
+    if (appliedFilters.length > 0) {
+      for (const f of appliedFilters) {
+        result = result.filter((p) => filterPredicate(p, f));
+      }
+    }
+
+    // sort
+    const sorted = [...result];
+    const directionFactor = sortDirection === "asc" ? 1 : -1;
+
+    sorted.sort((a, b) => {
+      let cmp = 0;
+      if (sortBy === "title") {
+        cmp = (a.title ?? "").localeCompare(b.title ?? "");
+      } else {
+        const aTime = a.updatedAtShopify ? new Date(a.updatedAtShopify).getTime() : 0;
+        const bTime = b.updatedAtShopify ? new Date(b.updatedAtShopify).getTime() : 0;
+        cmp = aTime - bTime;
+      }
+      return cmp * directionFactor;
+    });
+
+    return sorted;
+  }, [query.data, searchTerm, appliedFilters, sortBy, sortDirection]);
+
+  /* ----------------------- */
+  /* Filter Builder registry */
+  /* ----------------------- */
+
+  const filterGroups: FilterFieldGroup[] = useMemo(
+    () => [
+      {
+        id: "product",
+        label: "Product Fields",
+        fields: PRODUCT_FIELDS,
+      },
+      {
+        id: "variant",
+        label: "Variant Fields",
+        fields: VARIANT_FIELDS,
+      },
+    ],
+    [],
+  );
+
+  const openFilterBuilder = useCallback(() => {
+    setFilterBuilderOpen(true);
+  }, []);
+
+  const closeFilterBuilder = useCallback(() => {
+    setFilterBuilderOpen(false);
+  }, []);
+
+  const removeFilter = useCallback((key: string) => {
+    setAppliedFilters((prev) => prev.filter((f) => f.key !== key));
+  }, []);
+
+  /* ----------------------- */
+  /* Render                  */
+  /* ----------------------- */
+
   return (
     <Page fullWidth title="Products (FAST plane)">
       <Layout>
+        {/* FAST status */}
         <Layout.Section>
-          <Card>
-            <Box padding="400">
-              {status ? (
-                <InlineStack
-                  gap="400"
-                  align="space-between"
-                  blockAlign="center"
-                >
-                  <InlineStack gap="200" blockAlign="center">
-                    <Badge tone={status.fastReady ? "success" : "critical"}>
-                      FAST {status.fastReady ? "ready" : "not ready"}
-                    </Badge>
-                    <Text as="span" variant="bodySm" tone="subdued">
-                      Rev {status.fastRevision}
-                    </Text>
-                    {status.fastLastSyncAt && (
-                      <Text as="span" variant="bodySm" tone="subdued">
-                        Last sync:{" "}
-                        {new Date(status.fastLastSyncAt).toLocaleString()}
-                      </Text>
-                    )}
-                  </InlineStack>
-                  {status.syncEnqueued && (
-                    <Badge tone="attention">Sync enqueued</Badge>
-                  )}
-                </InlineStack>
-              ) : (
-                <Text as="p" variant="bodySm" tone="subdued">
-                  Loading FAST sync status…
-                </Text>
-              )}
-            </Box>
-          </Card>
+          <FastStatusCard fastStatus={fastStatus} />
         </Layout.Section>
 
+        {/* Filters + Sort */}
         <Layout.Section>
-          <Card>
-            <Box padding="400">
-              {loadingInitial && (
-                <InlineStack align="center" gap="200" blockAlign="center">
-                  <Spinner />
-                  <Text as="p">Loading products…</Text>
-                </InlineStack>
-              )}
+          <ProductsFiltersCard
+            searchInput={searchInput}
+            onSearchInputChange={setSearchInput}
+            onSearchClick={handleSearchClick}
+            isSearching={query.isFetching && !!searchTerm}
+            searchTerm={searchTerm}
+            appliedFilters={appliedFilters}
+            onRemoveFilter={removeFilter}
+            sortBy={sortBy}
+            sortDirection={sortDirection}
+            onSortByChange={handleSortByChange}
+            onSortDirectionChange={handleSortDirectionChange}
+            onOpenAddFilter={openFilterBuilder}
+            onClearAll={handleClearAll}
+          />
+        </Layout.Section>
 
-              {!loadingInitial && !allItems.length && (
-                <Banner tone="info">
-                  <p>No products found in FAST plane yet.</p>
-                  <p>The initial sync might still be running.</p>
-                </Banner>
-              )}
-            </Box>
-
-            {!loadingInitial && allItems.length > 0 && (
-              <>
-                <IndexTable
-                  resourceName={resourceName}
-                  itemCount={allItems.length}
-                  selectedItemsCount={
-                    allResourcesSelected ? "All" : selectedResources.length
-                  }
-                  onSelectionChange={handleSelectionChange}
-                  headings={[
-                    { title: "Title" },
-                    { title: "Status" },
-                    { title: "Vendor" },
-                    { title: "Type" },
-                    { title: "Tags" },
-                    { title: "Images" },
-                    { title: "Updated" },
-                  ]}
-                >
-                  {allItems.map((product, index) => (
-                    <IndexTable.Row
-                      id={product.id}
-                      key={product.id}
-                      position={index}
-                      selected={selectedResources.includes(product.id)}
-                    >
-                      <IndexTable.Cell>
-                        <Text as="span" fontWeight="semibold">
-                          {product.title}
-                        </Text>
-                        <Text as="div" variant="bodySm" tone="subdued">
-                          {product.handle}
-                        </Text>
-                      </IndexTable.Cell>
-                      <IndexTable.Cell>
-                        <Badge
-                          tone={
-                            product.status === "ACTIVE"
-                              ? "success"
-                              : "subdued"
-                          }
-                        >
-                          {product.status}
-                        </Badge>
-                      </IndexTable.Cell>
-                      <IndexTable.Cell>
-                        {product.vendor || "—"}
-                      </IndexTable.Cell>
-                      <IndexTable.Cell>
-                        {product.productType || "—"}
-                      </IndexTable.Cell>
-                      <IndexTable.Cell>
-                        {product.tags.length
-                          ? product.tags.join(", ")
-                          : "—"}
-                      </IndexTable.Cell>
-                      <IndexTable.Cell>
-                        <Badge tone={product.hasImages ? "success" : "critical"}>
-                          {product.hasImages ? "Yes" : "No"}
-                        </Badge>
-                      </IndexTable.Cell>
-                      <IndexTable.Cell>
-                        <Text variant="bodySm" tone="subdued">
-                          {product.updatedAtShopify
-                            ? new Date(
-                                product.updatedAtShopify,
-                              ).toLocaleString()
-                            : "—"}
-                        </Text>
-                      </IndexTable.Cell>
-                    </IndexTable.Row>
-                  ))}
-                </IndexTable>
-
-                {query.hasNextPage && (
-                  <Box padding="400">
-                    <InlineStack align="center">
-                      <button
-                        type="button"
-                        onClick={() => query.fetchNextPage()}
-                        disabled={loadingMore}
-                      >
-                        {loadingMore ? "Loading…" : "Load more"}
-                      </button>
-                    </InlineStack>
-                  </Box>
-                )}
-              </>
-            )}
-          </Card>
+        {/* Products table */}
+        <Layout.Section>
+          <ProductsTable
+            items={allItems}
+            loadingInitial={loadingInitial}
+            loadingMore={loadingMore}
+            hasNextPage={query.hasNextPage ?? false}
+            onLoadMore={() => query.fetchNextPage()}
+          />
         </Layout.Section>
       </Layout>
+
+      {/* Generic Filter Builder (modal) */}
+      <FilterBuilder
+        open={filterBuilderOpen}
+        onClose={closeFilterBuilder}
+        groups={filterGroups}
+        value={appliedFilters}
+        onChange={setAppliedFilters}
+      />
     </Page>
   );
 }
