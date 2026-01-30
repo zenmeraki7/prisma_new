@@ -1,24 +1,20 @@
-// web/frontend/hooks/useBootstrapProducts.ts
-import { useInfiniteQuery, type UseInfiniteQueryResult } from "@tanstack/react-query";
-import { useAppBridge } from "@shopify/app-bridge-react";
+// web/frontend/pages/productsPage/useBootstrapProducts.ts
+import {
+  useInfiniteQuery,
+  type UseInfiniteQueryResult,
+  type QueryFunctionContext,
+} from "@tanstack/react-query";
 import type { AppBridgeState } from "@shopify/app-bridge-react";
 
 import {
   bootstrapProductsRequest,
   type BootstrapProductsPageDto,
-} from "../queries/bootstrapProducts";
+} from "../../queries/bootstrapProducts";
 
-/**
- * Central FAST-plane products fetcher.
- *
- * - Fetches ProductLiteDto pages via bootstrapProductsRequest
- * - Supports a simple "search" string that backend may use
- */
 export function useBootstrapProducts(
+  app: AppBridgeState | undefined,
   search: string | null,
 ): UseInfiniteQueryResult<BootstrapProductsPageDto, Error> {
-  const app = useAppBridge() as AppBridgeState | undefined;
-
   return useInfiniteQuery<
     BootstrapProductsPageDto,
     Error,
@@ -27,9 +23,14 @@ export function useBootstrapProducts(
     string | null
   >({
     queryKey: ["bootstrapProducts", { search }],
-    enabled: !!app, // do nothing until AppBridge is ready
+    enabled: !!app,
     initialPageParam: null,
-    queryFn: async ({ pageParam }) => {
+    queryFn: async ({
+      pageParam,
+    }: QueryFunctionContext<
+      ["bootstrapProducts", { search: string | null }],
+      string | null
+    >) => {
       if (!app) throw new Error("AppBridge not ready");
 
       return bootstrapProductsRequest(app, {

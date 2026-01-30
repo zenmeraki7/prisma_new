@@ -3,25 +3,26 @@ import "dotenv/config";
 import { prisma } from "../db/prisma.js";
 
 async function main() {
-  // IMPORTANT: set this to the store where you're opening the embedded app
-  // e.g. "demo-zen-store.myshopify.com"
   const TARGET_SHOP_DOMAIN = "demo-zen-store.myshopify.com";
 
-  const shop = await prisma.shop.findUnique({
+  let shop = await prisma.shop.findUnique({
     where: { shopDomain: TARGET_SHOP_DOMAIN },
   });
 
   if (!shop) {
-    console.error("❌ No Shop row found for", TARGET_SHOP_DOMAIN);
-    console.error(
-      "   Make sure you've opened the app and run syncProductsToDb at least once for that shop."
-    );
-    return;
+    console.log("No Shop row found, creating a dev Shop row for", TARGET_SHOP_DOMAIN);
+
+    shop = await prisma.shop.create({
+      data: {
+        shopDomain: TARGET_SHOP_DOMAIN,
+        // accessToken won't be used by this script, can be dummy for now
+        accessToken: "dev-dummy-token",
+      },
+    });
   }
 
   console.log("Using shop", shop.id, shop.shopDomain);
 
-  // Create a dummy snapshot run
   const run = await prisma.snapshotRun.create({
     data: {
       shopId: shop.id,
@@ -36,7 +37,6 @@ async function main() {
 
   console.log("✅ Created SnapshotRun:", run.id);
 
-  // Add a couple of events
   await prisma.snapshotRunEvent.createMany({
     data: [
       {

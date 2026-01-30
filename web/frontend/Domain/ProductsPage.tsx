@@ -1,24 +1,24 @@
 // web/frontend/pages/ProductsPage.tsx
 import React, { useMemo, useState, useCallback } from "react";
 import { Page, Layout } from "@shopify/polaris";
+import { useAppBridge } from "@shopify/app-bridge-react";
+import type { AppBridgeState } from "@shopify/app-bridge-react";
 
 import type { ProductLiteDto } from "../queries/bootstrapProducts";
-import { useBootstrapProducts } from "../hooks/useBootstrapProducts";
+import { useBootstrapProducts } from "../Domain/productPage/useBootstrapProducts";
+import { fieldSupportedNow } from "../Domain/productPage/filterRegistry";
+import { filterPredicate } from "../Domain/productPage/filterUtils";
+import { useProductsPageFilterState } from "../Domain/productPage/useFilterState";
 
-import {
-  PRODUCT_FIELDS,
-  VARIANT_FIELDS,
-  filterPredicate,
-  type AppliedFilter,
-} from "../lib/products/filters";
-import type { FilterFieldGroup } from "../lib/filters/registry";
-
-import { FastStatusCard } from "../components/products/FastStatusCard";
-import { ProductsFiltersCard } from "../components/products/ProductsFiltersCard";
-import { ProductsTable } from "../components/products/ProductsTable";
-import { FilterBuilder } from "../components/products/FilterBuilderModal";
+import { FastStatusCard } from "../Domain/productPage/components/FastStatusCard";
+import { FiltersSortCard } from "../Domain/productPage/components/FiltersSortCard";
+import { ProductsTableCard } from "../Domain/productPage/components/ProductsTableCard";
+import { AddFilterModal } from "../Domain/productPage/components/AddFilterModal";
+import { ConfigureFilterModal } from "../Domain/productPage/components/ConfigureFilterModal";
 
 export default function ProductsPage() {
+  const app = useAppBridge();
+
   // Search (top bar)
   const [searchInput, setSearchInput] = useState<string>("");
   const [searchTerm, setSearchTerm] = useState<string | null>(null);
@@ -27,21 +27,14 @@ export default function ProductsPage() {
   const [sortBy, setSortBy] = useState<string>("sort");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
 
-  // Filters
-  const [appliedFilters, setAppliedFilters] = useState<AppliedFilter[]>([]);
-
-  // Filter Builder modal
-  const [filterBuilderOpen, setFilterBuilderOpen] = useState(false);
-
-  // FAST-plane query
-  const query = useBootstrapProducts(searchTerm);
+  const query = useBootstrapProducts(app as AppBridgeState | undefined, searchTerm);
   const fastStatus = query.data?.pages[0]?.status;
 
   const loadingInitial = query.isLoading;
   const loadingMore = query.isFetchingNextPage;
 
   /* ----------------------- */
-  /* Search & sort helpers   */
+  /* Helpers                 */
   /* ----------------------- */
 
   const handleSearchClick = useCallback(() => {
@@ -52,16 +45,28 @@ export default function ProductsPage() {
   const handleClearAll = useCallback(() => {
     setSearchInput("");
     setSearchTerm(null);
-    setAppliedFilters([]);
+    // filters are cleared inside the filter hook via clearAll callback we expose
+    // but we keep sort reset here to preserve original behavior
     setSortBy("sort");
     setSortDirection("desc");
   }, []);
 
   const handleSortByChange = useCallback((value: string) => setSortBy(value), []);
   const handleSortDirectionChange = useCallback(
-    (value: "asc" | "desc") => setSortDirection(value),
+    (value: string) => setSortDirection(value as "asc" | "desc"),
     [],
   );
+
+  /* ----------------------- */
+  /* Filters state (modals)  */
+  /* ----------------------- */
+
+  const filters = useProductsPageFilterState();
+
+  const onClearAll = useCallback(() => {
+    handleClearAll();
+    filters.clearAllFilters();
+  }, [handleClearAll, filters]);
 
   /* ----------------------- */
   /* Data: filtered + sorted */
@@ -71,8 +76,7 @@ export default function ProductsPage() {
     if (!query.data) return [];
     const raw = query.data.pages.flatMap((p) => p.items);
 
-    // main search term: match vendor OR title OR handle (extra safety;
-    // backend can also use search)
+    // main search term: match vendor OR title OR handle
     let result = raw;
     if (searchTerm && searchTerm.trim() !== "") {
       const needle = searchTerm.toLowerCase();
@@ -80,17 +84,15 @@ export default function ProductsPage() {
         const vendor = (p.vendor ?? "").toLowerCase();
         const title = (p.title ?? "").toLowerCase();
         const handle = (p.handle ?? "").toLowerCase();
-        return (
-          vendor.includes(needle) ||
-          title.includes(needle) ||
-          handle.includes(needle)
-        );
+        return vendor.includes(needle) || title.includes(needle) || handle.includes(needle);
       });
     }
 
-    // applied filters (client-side)
-    if (appliedFilters.length > 0) {
-      for (const f of appliedFilters) {
+    // applied filters
+    if (filters.appliedFilters.length > 0) {
+      for (const f of filters.appliedFilters) {
+        // If this field isn't supported yet (no data), we do NOT filter out rows.
+        if (!fieldSupportedNow(f.key)) continue;
         result = result.filter((p) => filterPredicate(p, f));
       }
     }
@@ -112,90 +114,89 @@ export default function ProductsPage() {
     });
 
     return sorted;
-  }, [query.data, searchTerm, appliedFilters, sortBy, sortDirection]);
-
-  /* ----------------------- */
-  /* Filter Builder registry */
-  /* ----------------------- */
-
-  const filterGroups: FilterFieldGroup[] = useMemo(
-    () => [
-      {
-        id: "product",
-        label: "Product Fields",
-        fields: PRODUCT_FIELDS,
-      },
-      {
-        id: "variant",
-        label: "Variant Fields",
-        fields: VARIANT_FIELDS,
-      },
-    ],
-    [],
-  );
-
-  const openFilterBuilder = useCallback(() => {
-    setFilterBuilderOpen(true);
-  }, []);
-
-  const closeFilterBuilder = useCallback(() => {
-    setFilterBuilderOpen(false);
-  }, []);
-
-  const removeFilter = useCallback((key: string) => {
-    setAppliedFilters((prev) => prev.filter((f) => f.key !== key));
-  }, []);
-
-  /* ----------------------- */
-  /* Render                  */
-  /* ----------------------- */
+  }, [query.data, searchTerm, filters.appliedFilters, sortBy, sortDirection]);
 
   return (
     <Page fullWidth title="Products (FAST plane)">
       <Layout>
-        {/* FAST status */}
         <Layout.Section>
           <FastStatusCard fastStatus={fastStatus} />
         </Layout.Section>
 
-        {/* Filters + Sort */}
         <Layout.Section>
-          <ProductsFiltersCard
+          <FiltersSortCard
             searchInput={searchInput}
-            onSearchInputChange={setSearchInput}
-            onSearchClick={handleSearchClick}
-            isSearching={query.isFetching && !!searchTerm}
+            setSearchInput={setSearchInput}
             searchTerm={searchTerm}
-            appliedFilters={appliedFilters}
-            onRemoveFilter={removeFilter}
+            onSearch={handleSearchClick}
+            onClear={onClearAll}
             sortBy={sortBy}
+            setSortBy={handleSortByChange}
             sortDirection={sortDirection}
-            onSortByChange={handleSortByChange}
-            onSortDirectionChange={handleSortDirectionChange}
-            onOpenAddFilter={openFilterBuilder}
-            onClearAll={handleClearAll}
+            setSortDirection={handleSortDirectionChange}
+            appliedFilters={filters.appliedFilters}
+            onOpenAddFilter={filters.openAddFilter}
+            onRemoveFilter={filters.removeFilter}
+            isSearching={query.isFetching && !!searchTerm}
+            isClearDisabled={
+              !searchInput &&
+              !searchTerm &&
+              filters.appliedFilters.length === 0 &&
+              sortBy === "sort" &&
+              sortDirection === "desc"
+            }
           />
         </Layout.Section>
 
-        {/* Products table */}
         <Layout.Section>
-          <ProductsTable
+          <ProductsTableCard
             items={allItems}
             loadingInitial={loadingInitial}
+            hasNextPage={!!query.hasNextPage}
             loadingMore={loadingMore}
-            hasNextPage={query.hasNextPage ?? false}
             onLoadMore={() => query.fetchNextPage()}
           />
         </Layout.Section>
       </Layout>
 
-      {/* Generic Filter Builder (modal) */}
-      <FilterBuilder
-        open={filterBuilderOpen}
-        onClose={closeFilterBuilder}
-        groups={filterGroups}
-        value={appliedFilters}
-        onChange={setAppliedFilters}
+      <AddFilterModal
+        open={filters.addFilterOpen}
+        filterSearch={filters.filterSearch}
+        setFilterSearch={filters.setFilterSearch}
+        onClose={filters.closeAddFilter}
+        onPickField={filters.openConfigForKey}
+      />
+
+      <ConfigureFilterModal
+        open={filters.configOpen}
+        onClose={filters.closeConfig}
+        title={filters.configTitle}
+        primaryActionLabel={filters.primaryActionLabel}
+        onApply={filters.applyConfig}
+        primaryDisabled={filters.configDisabled}
+        activeKey={filters.activeKey}
+        configKind={filters.configKind}
+        // config state setters
+        stringOp={filters.stringOp}
+        setStringOp={filters.setStringOp}
+        stringValue={filters.stringValue}
+        setStringValue={filters.setStringValue}
+        numberOp={filters.numberOp}
+        setNumberOp={filters.setNumberOp}
+        numberA={filters.numberA}
+        setNumberA={filters.setNumberA}
+        numberB={filters.numberB}
+        setNumberB={filters.setNumberB}
+        dateOp={filters.dateOp}
+        setDateOp={filters.setDateOp}
+        dateValue={filters.dateValue}
+        setDateValue={filters.setDateValue}
+        enumOp={filters.enumOp}
+        setEnumOp={filters.setEnumOp}
+        enumValue={filters.enumValue}
+        setEnumValue={filters.setEnumValue}
+        boolValue={filters.boolValue}
+        setBoolValue={filters.setBoolValue}
       />
     </Page>
   );
