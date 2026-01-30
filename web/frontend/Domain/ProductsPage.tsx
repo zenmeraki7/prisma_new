@@ -16,6 +16,7 @@ import {
   Filters,
   ChoiceList,
   Autocomplete,
+  Select,
   type FiltersProps,
 } from "@shopify/polaris";
 import { useAppBridge } from "@shopify/app-bridge-react";
@@ -67,6 +68,14 @@ const STATUS_TONE: Record<
 };
 
 /* ----------------------- */
+/* Sort types              */
+/* ----------------------- */
+
+// "none" => placeholder "Sort by" (no sort)
+type SortField = "none" | "title" | "vendor" | "productType" | "id";
+type SortDirection = "asc" | "desc";
+
+/* ----------------------- */
 /* Page                    */
 /* ----------------------- */
 
@@ -74,21 +83,23 @@ export default function ProductsPage() {
   const app = useAppBridge() as AppBridgeState | undefined;
 
   /* ----------------------- */
-  /* Filter state            */
+  /* Filter + sort state     */
   /* ----------------------- */
 
-  // Global title search (query bar)
   const [queryValue, setQueryValue] = useState("");
 
-  // COMMITTED filter values (actually used for table + chips)
   const [vendorFilter, setVendorFilter] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] =
     useState<ProductLiteDto["status"] | null>(null);
 
-  // DRAFT values while editing vendor/type filters
   const [vendorInput, setVendorInput] = useState("");
   const [typeInput, setTypeInput] = useState("");
+
+  // sort configuration
+  const [sortField, setSortField] = useState<SortField>("none"); // default = "Sort by"
+  const [sortDirection, setSortDirection] =
+    useState<SortDirection>("asc"); // default Ascending
 
   const query = useBootstrapProducts(app);
   const loadingInitial = query.isLoading;
@@ -131,7 +142,6 @@ export default function ProductsPage() {
   /* ----------------------- */
   /* Autocomplete options    */
   /* ----------------------- */
-  // suggestions only after typing something
 
   const vendorOptions: Autocomplete.OptionDescriptor[] = useMemo(() => {
     const q = vendorInput.trim().toLowerCase();
@@ -150,7 +160,7 @@ export default function ProductsPage() {
   }, [allTypes, typeInput]);
 
   /* ----------------------- */
-  /* Filtered table items    */
+  /* Filtered + sorted items */
   /* ----------------------- */
 
   const allItems: ProductLiteDto[] = useMemo(() => {
@@ -165,7 +175,7 @@ export default function ProductsPage() {
       );
     }
 
-    // ONLY committed filters are used here
+    // Filters
     if (vendorFilter) {
       result = result.filter((p) => p.vendor === vendorFilter);
     }
@@ -176,8 +186,60 @@ export default function ProductsPage() {
       result = result.filter((p) => p.status === statusFilter);
     }
 
+    // Sort based on field + direction
+    if (sortField !== "none") {
+      const dir = sortDirection === "asc" ? 1 : -1;
+
+      result = [...result].sort((a, b) => {
+        let av: string | number | null = null;
+        let bv: string | number | null = null;
+
+        switch (sortField) {
+          case "title":
+            av = a.title ?? "";
+            bv = b.title ?? "";
+            break;
+          case "vendor":
+            av = a.vendor ?? "";
+            bv = b.vendor ?? "";
+            break;
+          case "productType":
+            av = a.productType ?? "";
+            bv = b.productType ?? "";
+            break;
+          case "id":
+            av = a.id ?? "";
+            bv = b.id ?? "";
+            break;
+          case "none":
+          default:
+            av = "";
+            bv = "";
+            break;
+        }
+
+        if (av == null) av = "";
+        if (bv == null) bv = "";
+
+        const as = String(av).toLowerCase();
+        const bs = String(bv).toLowerCase();
+
+        if (as < bs) return -1 * dir;
+        if (as > bs) return 1 * dir;
+        return 0;
+      });
+    }
+
     return result;
-  }, [query.data, queryValue, vendorFilter, typeFilter, statusFilter]);
+  }, [
+    query.data,
+    queryValue,
+    vendorFilter,
+    typeFilter,
+    statusFilter,
+    sortField,
+    sortDirection,
+  ]);
 
   const { selectedResources, allResourcesSelected, handleSelectionChange } =
     useIndexResourceState(allItems, {
@@ -196,6 +258,7 @@ export default function ProductsPage() {
 
     setVendorInput("");
     setTypeInput("");
+    // keep sortField + sortDirection as user preference
   }, []);
 
   /* ----------------------- */
@@ -248,7 +311,7 @@ export default function ProductsPage() {
   return (
     <Page fullWidth title="Products (FAST plane)">
       <Layout>
-        {/* Filters */}
+        {/* Filters + Sort block */}
         <Layout.Section>
           <Card>
             <Box padding="400">
@@ -291,8 +354,8 @@ export default function ProductsPage() {
                                 size="slim"
                                 onClick={() => {
                                   const value = vendorInput.trim();
-                                  setVendorFilter(value || null); // filter table
-                                  setVendorInput(""); // clear so no suggestions after apply
+                                  setVendorFilter(value || null);
+                                  setVendorInput("");
                                 }}
                               >
                                 Apply
@@ -346,8 +409,8 @@ export default function ProductsPage() {
                                 size="slim"
                                 onClick={() => {
                                   const value = typeInput.trim();
-                                  setTypeFilter(value || null); // filter table
-                                  setTypeInput(""); // clear so no suggestions after apply
+                                  setTypeFilter(value || null);
+                                  setTypeInput("");
                                 }}
                               >
                                 Apply
@@ -368,7 +431,7 @@ export default function ProductsPage() {
                     ),
                   },
 
-                  // Status: immediate filter, NO Apply/Reset
+                  // Status: immediate filter
                   {
                     key: "status",
                     label: "Status",
@@ -384,7 +447,7 @@ export default function ProductsPage() {
                           const value = selected[0] as
                             | ProductLiteDto["status"]
                             | undefined;
-                          setStatusFilter(value ?? null); // apply instantly
+                          setStatusFilter(value ?? null);
                         }}
                       />
                     ),
@@ -392,7 +455,38 @@ export default function ProductsPage() {
                 ]}
                 appliedFilters={appliedFilters}
                 onClearAll={clearAll}
-              />
+              >
+                {/* SORT BAR: under search bar, inline-right of Add filter */}
+                <InlineStack align="end" gap="200">
+                  {/* First dropdown: "Sort by" default (placeholder) */}
+                  <Select
+                    label="Sort field"
+                    labelHidden
+                    options={[
+                      { label: "Sort by", value: "none" },
+                      { label: "Title", value: "title" },
+                      { label: "Vendor", value: "vendor" },
+                      { label: "Product type", value: "productType" },
+                      { label: "ID", value: "id" },
+                    ]}
+                    value={sortField}
+                    onChange={(value) => setSortField(value as SortField)}
+                  />
+                  {/* Second dropdown: Asc / Desc */}
+                  <Select
+                    label="Sort direction"
+                    labelHidden
+                    options={[
+                      { label: "Ascending", value: "asc" },
+                      { label: "Descending", value: "desc" },
+                    ]}
+                    value={sortDirection}
+                    onChange={(value) =>
+                      setSortDirection(value as SortDirection)
+                    }
+                  />
+                </InlineStack>
+              </Filters>
             </Box>
           </Card>
         </Layout.Section>
