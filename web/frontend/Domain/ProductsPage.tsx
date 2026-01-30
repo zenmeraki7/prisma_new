@@ -1,49 +1,50 @@
 // web/frontend/pages/ProductsPage.tsx
-import React, { useMemo, useState, useCallback } from "react";
+import React, { useState, useMemo, useCallback, useEffect } from "react";
 import { Page, Layout } from "@shopify/polaris";
-
 import type { ProductLiteDto } from "../queries/bootstrapProducts";
 import { useBootstrapProducts } from "../hooks/useBootstrapProducts";
-
-import {
-  PRODUCT_FIELDS,
-  VARIANT_FIELDS,
-  filterPredicate,
-  type AppliedFilter,
-} from "../lib/products/filters";
-import type { FilterFieldGroup } from "../lib/filters/registry";
-
-import { FastStatusCard } from "../components/products/FastStatusCard";
+import { useAuthenticatedFetch } from "../hooks/useAuthenticatedFetch"; // Add this import
+import { PRODUCT_FIELDS, VARIANT_FIELDS, filterPredicate, AppliedFilter } from "../lib/products/filters";
 import { ProductsFiltersCard } from "../components/products/ProductsFiltersCard";
 import { ProductsTable } from "../components/products/ProductsTable";
 import { FilterBuilder } from "../components/products/FilterBuilderModal";
+import { FastStatusCard } from "../components/products/FastStatusCard";
 
 export default function ProductsPage() {
-  // Search (top bar)
+  // Use the custom hook instead
+  const fetch = useAuthenticatedFetch();
+
+  // -----------------------
+  // State
+  // -----------------------
   const [searchInput, setSearchInput] = useState<string>("");
   const [searchTerm, setSearchTerm] = useState<string | null>(null);
 
-  // Sort
   const [sortBy, setSortBy] = useState<string>("sort");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
 
-  // Filters
   const [appliedFilters, setAppliedFilters] = useState<AppliedFilter[]>([]);
-
-  // Filter Builder modal
   const [filterBuilderOpen, setFilterBuilderOpen] = useState(false);
 
-  // FAST-plane query
+  const [snapshotFilteredItems, setSnapshotFilteredItems] = useState<ProductLiteDto[]>([]);
+  const [loadingSnapshotFilters, setLoadingSnapshotFilters] = useState(false);
+
+  // -----------------------
+  // FAST-plane products
+  // -----------------------
   const query = useBootstrapProducts(searchTerm);
   const fastStatus = query.data?.pages[0]?.status;
-
   const loadingInitial = query.isLoading;
   const loadingMore = query.isFetchingNextPage;
 
-  /* ----------------------- */
-  /* Search & sort helpers   */
-  /* ----------------------- */
+  const allFastItems: ProductLiteDto[] = useMemo(() => {
+    if (!query.data) return [];
+    return query.data.pages.flatMap((p) => p.items);
+  }, [query.data]);
 
+  // -----------------------
+  // Handlers
+  // -----------------------
   const handleSearchClick = useCallback(() => {
     const trimmed = searchInput.trim();
     setSearchTerm(trimmed.length > 0 ? trimmed : null);
@@ -55,6 +56,7 @@ export default function ProductsPage() {
     setAppliedFilters([]);
     setSortBy("sort");
     setSortDirection("desc");
+    setSnapshotFilteredItems([]);
   }, []);
 
   const handleSortByChange = useCallback((value: string) => setSortBy(value), []);
@@ -63,102 +65,145 @@ export default function ProductsPage() {
     [],
   );
 
-  /* ----------------------- */
-  /* Data: filtered + sorted */
-  /* ----------------------- */
-
-  const allItems: ProductLiteDto[] = useMemo(() => {
-    if (!query.data) return [];
-    const raw = query.data.pages.flatMap((p) => p.items);
-
-    // main search term: match vendor OR title OR handle (extra safety;
-    // backend can also use search)
-    let result = raw;
-    if (searchTerm && searchTerm.trim() !== "") {
-      const needle = searchTerm.toLowerCase();
-      result = result.filter((p) => {
-        const vendor = (p.vendor ?? "").toLowerCase();
-        const title = (p.title ?? "").toLowerCase();
-        const handle = (p.handle ?? "").toLowerCase();
-        return (
-          vendor.includes(needle) ||
-          title.includes(needle) ||
-          handle.includes(needle)
-        );
-      });
-    }
-
-    // applied filters (client-side)
-    if (appliedFilters.length > 0) {
-      for (const f of appliedFilters) {
-        result = result.filter((p) => filterPredicate(p, f));
-      }
-    }
-
-    // sort
-    const sorted = [...result];
-    const directionFactor = sortDirection === "asc" ? 1 : -1;
-
-    sorted.sort((a, b) => {
-      let cmp = 0;
-      if (sortBy === "title") {
-        cmp = (a.title ?? "").localeCompare(b.title ?? "");
-      } else {
-        const aTime = a.updatedAtShopify ? new Date(a.updatedAtShopify).getTime() : 0;
-        const bTime = b.updatedAtShopify ? new Date(b.updatedAtShopify).getTime() : 0;
-        cmp = aTime - bTime;
-      }
-      return cmp * directionFactor;
-    });
-
-    return sorted;
-  }, [query.data, searchTerm, appliedFilters, sortBy, sortDirection]);
-
-  /* ----------------------- */
-  /* Filter Builder registry */
-  /* ----------------------- */
-
-  const filterGroups: FilterFieldGroup[] = useMemo(
-    () => [
-      {
-        id: "product",
-        label: "Product Fields",
-        fields: PRODUCT_FIELDS,
-      },
-      {
-        id: "variant",
-        label: "Variant Fields",
-        fields: VARIANT_FIELDS,
-      },
-    ],
-    [],
-  );
-
-  const openFilterBuilder = useCallback(() => {
-    setFilterBuilderOpen(true);
-  }, []);
-
-  const closeFilterBuilder = useCallback(() => {
-    setFilterBuilderOpen(false);
-  }, []);
+  const openFilterBuilder = useCallback(() => setFilterBuilderOpen(true), []);
+  const closeFilterBuilder = useCallback(() => setFilterBuilderOpen(false), []);
 
   const removeFilter = useCallback((key: string) => {
     setAppliedFilters((prev) => prev.filter((f) => f.key !== key));
   }, []);
 
-  /* ----------------------- */
-  /* Render                  */
-  /* ----------------------- */
+  // -----------------------
+  // Split filters
+  // -----------------------
+  const productFilters = useMemo(
+    () => appliedFilters.filter(f => f.key.startsWith("product.")),
+    [appliedFilters]
+  );
+  
+  const variantFilters = useMemo(
+    () => appliedFilters.filter(f => f.key.startsWith("variant.")),
+    [appliedFilters]
+  );
 
+  // -----------------------
+  // Client-side filtering (product fields + search)
+  // -----------------------
+  const filteredFastItems: ProductLiteDto[] = useMemo(() => {
+    let items = [...allFastItems];
+
+    // search
+    if (searchTerm && searchTerm.trim()) {
+      const needle = searchTerm.toLowerCase();
+      items = items.filter(p =>
+        (p.title ?? "").toLowerCase().includes(needle) ||
+        (p.vendor ?? "").toLowerCase().includes(needle) ||
+        (p.handle ?? "").toLowerCase().includes(needle)
+      );
+    }
+
+    // product filters
+    if (productFilters.length > 0) {
+      items = items.filter(p => productFilters.every(f => filterPredicate(p, f)));
+    }
+
+    // sorting
+    const direction = sortDirection === "asc" ? 1 : -1;
+    items.sort((a, b) => {
+      if (sortBy === "title") {
+        return (a.title ?? "").localeCompare(b.title ?? "") * direction;
+      } else {
+        const aTime = a.updatedAtShopify ? new Date(a.updatedAtShopify).getTime() : 0;
+        const bTime = b.updatedAtShopify ? new Date(b.updatedAtShopify).getTime() : 0;
+        return (aTime - bTime) * direction;
+      }
+    });
+
+    console.log("🟢 Client-side filtered items count:", items.length);
+    return items;
+  }, [allFastItems, searchTerm, productFilters, sortBy, sortDirection]);
+
+  // -----------------------
+  // Server-side filtering (variant fields)
+  // -----------------------
+  useEffect(() => {
+    if (variantFilters.length === 0) {
+      setSnapshotFilteredItems([]);
+      return;
+    }
+
+    let cancelled = false;
+
+    const fetchSnapshotFilters = async () => {
+      try {
+        setLoadingSnapshotFilters(true);
+
+        const planHash = fastStatus?.fastRevision?.toString() ?? "unknown";
+
+        console.log("📡 Fetching snapshot filters:", { planHash, variantFilters });
+
+        const res = await fetch("/api/products/snapshotFilter", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ planHash, filters: variantFilters }),
+        });
+
+        if (!res.ok) {
+          const errorText = await res.text();
+          throw new Error(`Snapshot fetch failed: ${res.status} ${errorText}`);
+        }
+
+        const data = await res.json();
+        console.log("✅ Snapshot filter results:", data);
+        
+        if (!cancelled) {
+          setSnapshotFilteredItems(data.items ?? []);
+        }
+      } catch (e) {
+        console.error("Snapshot filter error:", e);
+        if (!cancelled) {
+          setSnapshotFilteredItems([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingSnapshotFilters(false);
+        }
+      }
+    };
+
+    // Add a small delay to debounce
+    const timeoutId = setTimeout(() => {
+      fetchSnapshotFilters();
+    }, 300);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timeoutId);
+    };
+  }, [variantFilters, fastStatus?.fastRevision, fetch]);
+
+  // -----------------------
+  // Combine product + variant results
+  // -----------------------
+  const finalItems = useMemo(() => {
+    if (variantFilters.length === 0) return filteredFastItems;
+
+    const snapshotIds = new Set(snapshotFilteredItems.map(p => p.id));
+    const combined = filteredFastItems.filter(p => snapshotIds.has(p.id));
+
+    console.log("🔹 Final displayed items count after combining snapshot:", combined.length);
+    return combined;
+  }, [filteredFastItems, snapshotFilteredItems, variantFilters.length]);
+
+  // -----------------------
+  // Render
+  // -----------------------
   return (
     <Page fullWidth title="Products (FAST plane)">
       <Layout>
-        {/* FAST status */}
         <Layout.Section>
           <FastStatusCard fastStatus={fastStatus} />
         </Layout.Section>
 
-        {/* Filters + Sort */}
         <Layout.Section>
           <ProductsFiltersCard
             searchInput={searchInput}
@@ -177,11 +222,10 @@ export default function ProductsPage() {
           />
         </Layout.Section>
 
-        {/* Products table */}
         <Layout.Section>
           <ProductsTable
-            items={allItems}
-            loadingInitial={loadingInitial}
+            items={finalItems}
+            loadingInitial={loadingInitial || loadingSnapshotFilters}
             loadingMore={loadingMore}
             hasNextPage={query.hasNextPage ?? false}
             onLoadMore={() => query.fetchNextPage()}
@@ -189,11 +233,13 @@ export default function ProductsPage() {
         </Layout.Section>
       </Layout>
 
-      {/* Generic Filter Builder (modal) */}
       <FilterBuilder
         open={filterBuilderOpen}
         onClose={closeFilterBuilder}
-        groups={filterGroups}
+        groups={[
+          { id: "product", label: "Product Fields", fields: PRODUCT_FIELDS },
+          { id: "variant", label: "Variant Fields", fields: VARIANT_FIELDS },
+        ]}
         value={appliedFilters}
         onChange={setAppliedFilters}
       />

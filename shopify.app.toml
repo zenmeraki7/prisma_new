@@ -2,7 +2,7 @@
 
 client_id = "6c1a39944a4ab6bdd6e4428ccceb028b"
 name = "new"
-application_url = "https://lions-messenger-oxford-little.trycloudflare.com"
+application_url = "https://buyer-loads-poker-tribe.trycloudflare.com"
 embedded = true
 handle = "new-270"
 
@@ -31,9 +31,9 @@ scopes = "read_inventory,read_locations,read_products,write_inventory,write_prod
 
 [auth]
 redirect_urls = [
-  "https://lions-messenger-oxford-little.trycloudflare.com/auth/callback",
-  "https://lions-messenger-oxford-little.trycloudflare.com/auth/shopify/callback",
-  "https://lions-messenger-oxford-little.trycloudflare.com/api/auth/callback"
+  "https://buyer-loads-poker-tribe.trycloudflare.com/auth/callback",
+  "https://buyer-loads-poker-tribe.trycloudflare.com/auth/shopify/callback",
+  "https://buyer-loads-poker-tribe.trycloudflare.com/api/auth/callback"
 ]
 
 [app_proxy]

@@ -197,3 +197,30 @@ export {
   dateOpLabel,
   enumOpLabel,
 };
+
+/* ----------------------- */
+/* Convert AppliedFilter → FilterExpr for snapshot/plan API */
+/* ----------------------- */
+
+export type FilterExpr =
+  | { type: "condition"; field: string; op: string; value: any; value2?: any }
+  | { type: "group"; op: "and" | "or"; children: FilterExpr[] };
+
+export function convertToFilterExpr(f: AppliedFilter): FilterExpr {
+  switch (f.kind) {
+    case "string":
+    case "enum":
+    case "number":
+    case "date":
+    case "boolean":
+      return {
+        type: "condition",
+        field: f.key,
+        op: f.op as string,
+        value: f.value,
+        value2: f.value2,
+      };
+    default:
+      throw new Error(`Unsupported filter kind: ${f.kind}`);
+  }
+}

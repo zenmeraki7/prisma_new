@@ -1,4 +1,3 @@
-// prisma/schema.prisma
 generator client {
   provider = "prisma-client-js"
 }
@@ -8,86 +7,196 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum JobType {
-  FAST_FULL_SYNC
-  FAST_DELTA_REFRESH
-  SNAPSHOT_RUN
-}
-
-enum JobStatus {
-  PENDING
-  RUNNING
-  SUCCEEDED
-  FAILED
-}
-
-model ShopState {
-  shopId         String   @id
-  fastReady      Boolean  @default(false)
-  fastLastSyncAt DateTime?
-  fastRevision   Int      @default(0)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
 model ProductLite {
-  id          String   @id // Shopify Product GID (stable, no extra mapping needed)
-  shopId      String
-  title       String
-  handle      String
-  status      String
-  vendor      String?
-  productType String?
-  tags        String[] @default([])
-  hasImages   Boolean  @default(false)
+  id                String
+  shopId            String
+  title             String
+  handle            String
+  status            String
+  vendor            String?
+  productType       String?
+  hasImages         Boolean             @default(false)
+  updatedAtShopify  DateTime?
+  ProductCollection ProductCollection[]
+  Shop              Shop                @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  ProductTag        ProductTag[]
+  VariantRollup     VariantRollup?
 
-  createdAtShopify   DateTime?
-  updatedAtShopify   DateTime?
-  publishedAtShopify DateTime?
-
-  // for sorting/paging in UI:
-  updatedAt DateTime @default(now()) @updatedAt
-
-  @@index([shopId, updatedAtShopify(sort: Desc)])
-  @@index([shopId, title])
-  @@unique([shopId, id])
+  @@id([shopId, id])
+  @@index([shopId, updatedAtShopify])
+  @@index([shopId, productType])
+  @@index([shopId, status])
+  @@index([shopId, vendor])
 }
 
 model VariantRollup {
-  // One row per product. Keep it tiny and indexed.
-  shopId    String
-  productId String
-
-  variantCount          Int     @default(0)
-  totalInventory        Int     @default(0)
-  minPrice              Decimal? @db.Decimal(18, 6)
-  maxPrice              Decimal? @db.Decimal(18, 6)
-  hasOutOfStockVariant  Boolean @default(false)
-  hasInStockVariant     Boolean @default(false)
-
-  updatedAt DateTime @default(now()) @updatedAt
+  shopId         String
+  productId      String
+  totalInventory Int?
+  minPrice       Decimal?    @db.Decimal(18, 2)
+  maxPrice       Decimal?    @db.Decimal(18, 2)
+  ProductLite    ProductLite @relation(fields: [shopId, productId], references: [shopId, id], onDelete: Cascade)
 
   @@id([shopId, productId])
   @@index([shopId, totalInventory])
 }
 
-model JobLedger {
-  id        String    @id @default(cuid())
-  shopId    String
-  type      JobType
-  status    JobStatus @default(PENDING)
+model SnapshotRun {
+  id            String             @id @default(cuid())
+  shopId        String
+  planHash      String
+  state         SnapshotState      @default(PENDING)
+  progress      Int                @default(0)
+  total         Int                @default(0)
+  errorMessage  String?
+  filterSummary String?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  expiresAt     DateTime?
+  products      SnapshotProduct[]
+  Shop          Shop               @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  events        SnapshotRunEvent[]
 
-  // BullMQ job id, if applicable
-  queueJobId String?
-
-  startedAt  DateTime?
-  finishedAt DateTime?
-  error      String?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([shopId, type, status])
+  @@index([shopId, planHash])
   @@index([shopId, createdAt])
+  @@index([expiresAt])
+  @@index([state])
+}
+
+model SnapshotProduct {
+  snapshotRunId String
+  shopId        String
+  productId     String
+  sortKey       DateTime?
+  Shop          Shop        @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  snapshotRun   SnapshotRun @relation(fields: [snapshotRunId], references: [id], onDelete: Cascade)
+
+  @@id([snapshotRunId, productId])
+  @@index([shopId, productId])
+}
+
+model SnapshotRunEvent {
+  id            String               @id @default(cuid())
+  snapshotRunId String
+  shopId        String
+  kind          SnapshotRunEventKind @default(INFO)
+  message       String?
+  createdAt     DateTime             @default(now())
+  Shop          Shop                 @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  snapshotRun   SnapshotRun          @relation(fields: [snapshotRunId], references: [id], onDelete: Cascade)
+
+  @@index([shopId, createdAt])
+  @@index([snapshotRunId, createdAt])
+}
+
+model BulkOpsJob {
+  id              String            @id
+  shopId          String
+  scopeType       String
+  scopeRef        String
+  actionKind      String
+  actionPayload   Json
+  state           BulkJobState      @default(PENDING)
+  total           Int               @default(0)
+  processed       Int               @default(0)
+  errorMessage    String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime
+  Shop            Shop              @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  BulkOpsJobEvent BulkOpsJobEvent[]
+
+  @@index([shopId, createdAt])
+  @@index([shopId, state])
+}
+
+model BulkOpsJobEvent {
+  id         String     @id
+  jobId      String
+  shopId     String
+  kind       String
+  message    String?
+  createdAt  DateTime   @default(now())
+  BulkOpsJob BulkOpsJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  Shop       Shop       @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([jobId, createdAt])
+  @@index([shopId, createdAt])
+}
+
+model FastSyncState {
+  shopId         String    @id
+  fastReady      Boolean   @default(false)
+  fastLastSyncAt DateTime?
+  fastRevision   Int       @default(0)
+  syncEnqueued   Boolean   @default(false)
+  Shop           Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+}
+
+model IdempotencyLedger {
+  id        String   @id
+  shopId    String
+  scope     String
+  key       String
+  createdAt DateTime @default(now())
+  Shop      Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@unique([shopId, scope, key])
+}
+
+model ProductCollection {
+  shopId       String
+  productId    String
+  collectionId String
+  ProductLite  ProductLite @relation(fields: [shopId, productId], references: [shopId, id], onDelete: Cascade)
+
+  @@id([shopId, productId, collectionId])
+  @@index([shopId, collectionId])
+}
+
+model ProductTag {
+  shopId      String
+  productId   String
+  tag         String
+  ProductLite ProductLite @relation(fields: [shopId, productId], references: [shopId, id], onDelete: Cascade)
+
+  @@id([shopId, productId, tag])
+  @@index([shopId, tag])
+}
+
+model Shop {
+  id                String              @id
+  shopDomain        String              @unique
+  accessToken       String
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime
+  BulkOpsJob        BulkOpsJob[]
+  BulkOpsJobEvent   BulkOpsJobEvent[]
+  FastSyncState     FastSyncState?
+  IdempotencyLedger IdempotencyLedger[]
+  ProductLite       ProductLite[]
+  SnapshotProduct   SnapshotProduct[]
+  SnapshotRun       SnapshotRun[]
+  SnapshotRunEvent  SnapshotRunEvent[]
+}
+
+enum BulkJobState {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+enum SnapshotRunEventKind {
+  INFO
+  WARNING
+  ERROR
+}
+
+enum SnapshotState {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  EXPIRED
 }

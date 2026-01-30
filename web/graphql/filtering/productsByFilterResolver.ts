@@ -6,7 +6,8 @@ import type { FilterExpr } from "../../lib/filters/dsl.js";
 import { FILTER_REGISTRY } from "../../lib/filters/registry.js";
 import { astFromJson } from "../../lib/filters/astFromJson.js";
 import { compileFastWhere } from "../../lib/filters/fastCompiler.js";
-import type { FilterExecutionMode } from "./planFilterResolver.js";
+import { planFilterExecution } from "./planFilterResolver.js";
+
 
 type ProductsByFilterArgs = {
   input: {
@@ -26,19 +27,21 @@ export async function productsByFilterResolver(
   args: ProductsByFilterArgs,
   ctx: Context,
 ) {
-  const { filter: rawFilter, mode, first, after } = args.input;
+  const { filter: rawFilter, first = 50, after } = args.input;
 
   // 1) Parse JSON → AST
   const expr: FilterExpr | null = astFromJson(rawFilter);
-
-  // 2) Only FAST plane is implemented here for now
-  if (mode !== "FAST_ONLY") {
-    throw new Error(
-      "SNAPSHOT mode not implemented yet for productsByFilter (FAST_ONLY only)",
-    );
+  if (!expr) {
+    return { items: [], nextCursor: null, planHash: null, mode: "FAST" };
   }
 
-  // 3) AST → Prisma where fragment (FAST filters only)
+  // 2) Only FAST plane is implemented for now
+  const plan = planFilterExecution(expr);
+  if (plan.mode !== "FAST") {
+    throw new Error("Only FAST mode is implemented");
+  }
+
+  // 3) AST → Prisma where fragment
   const fastWhere = compileFastWhere(expr, FILTER_REGISTRY);
 
   // 4) Full where with tenant isolation
@@ -47,17 +50,14 @@ export async function productsByFilterResolver(
     ...fastWhere,
   };
 
-  const pageSize = Math.min(Math.max(first ?? 50, 1), 200);
+  const pageSize = Math.min(Math.max(first, 1), 200);
 
   const rows = await prisma.productLite.findMany({
     where,
     orderBy: { id: "asc" },
     take: pageSize + 1,
     ...(after
-      ? {
-          cursor: { shopId_id: { shopId: ctx.shopId, id: after } },
-          skip: 1,
-        }
+      ? { cursor: { shopId_id: { shopId: ctx.shopId, id: after } }, skip: 1 }
       : {}),
   });
 
@@ -65,8 +65,9 @@ export async function productsByFilterResolver(
   const items = hasNextPage ? rows.slice(0, pageSize) : rows;
 
   return {
-    items,                                        // ProductLite rows
+    items,
     nextCursor: hasNextPage ? items[items.length - 1].id : null,
-    planHash: null,
+    planHash: plan.planHash,
+    mode: "FAST",
   };
 }

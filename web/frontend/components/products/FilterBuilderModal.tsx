@@ -1,4 +1,4 @@
-// web/frontend/components/filters/FilterBuilder.tsx
+// web/frontend/components/filters/FilterBuilderModal.tsx
 import React, { useMemo, useState, useCallback } from "react";
 import {
   Modal,
@@ -86,21 +86,38 @@ export function FilterBuilder({
 
   const configKind: FilterKind = activeField?.kind ?? "string";
 
-  const configDisabled = useMemo(() => {
-    if (!activeKey) return true;
+const configDisabled = useMemo(() => {
+  if (!activeKey) return true;
 
-    if (configKind === "string") return stringValue.trim() === "";
-    if (configKind === "number") {
+  switch (configKind) {
+    case "string":
+      return stringValue.trim() === "";
+    
+    case "number": {
       const a = Number(numberA);
       if (Number.isNaN(a)) return true;
-      if (numberOp === "between") return Number.isNaN(Number(numberB));
+      if (numberOp === "between") {
+        return Number.isNaN(Number(numberB));
+      }
       return false;
     }
-    if (configKind === "date") return dateValue.trim() === "";
-    if (configKind === "enum") return enumValue.trim() === "";
-    if (configKind === "boolean") return false;
-    return true;
-  }, [activeKey, configKind, stringValue, numberA, numberB, numberOp, dateValue, enumValue]);
+    
+    case "date":
+      return dateValue.trim() === "";
+    
+    case "enum":
+      return enumValue.trim() === "";
+    
+    case "boolean":
+      return false;
+    
+    default:
+      // If we reach here, something is wrong - log it for debugging
+      console.warn(`Unknown filter kind: ${configKind} for field ${activeKey}`);
+      return false; // Allow the user to proceed instead of blocking them
+  }
+}, [activeKey, configKind, stringValue, numberA, numberB, numberOp, dateValue, enumValue]);
+
 
   const selectFieldForConfig = useCallback(
     (key: string) => {

@@ -1,5 +1,4 @@
 // web/frontend/components/products/ProductsFiltersCard.tsx
-
 import React, { useMemo } from "react";
 import {
   Card,
@@ -11,6 +10,7 @@ import {
   Tag,
   Select,
   Text,
+  Tooltip,
 } from "@shopify/polaris";
 import { PlusIcon } from "@shopify/polaris-icons";
 
@@ -22,6 +22,8 @@ import {
   enumOpLabel,
   fieldLabel,
 } from "../../lib/products/filters";
+
+import { VARIANT_FIELDS } from "../../lib/products/filters";
 
 export interface ProductsFiltersCardProps {
   // Search
@@ -68,7 +70,7 @@ export function ProductsFiltersCard({
       appliedFilters.length === 0 &&
       sortBy === "sort" &&
       sortDirection === "desc",
-    [searchInput, searchTerm, appliedFilters.length, sortBy, sortDirection],
+    [searchInput, searchTerm, appliedFilters.length, sortBy, sortDirection]
   );
 
   return (
@@ -126,10 +128,25 @@ export function ProductsFiltersCard({
                     else if (f.kind === "enum") desc = `${enumOpLabel(f.op)}: ${f.value}`;
                     else if (f.kind === "boolean") desc = `Is: ${f.value ? "Yes" : "No"}`;
 
+                    // Check if variant field (snapshot)
+                    const isVariantField = VARIANT_FIELDS.some((vf) => vf.key === f.key);
+
                     return (
-                      <Tag key={f.key} onRemove={() => onRemoveFilter(f.key)}>
-                        {fieldLabel(f.key)} — {desc}
-                      </Tag>
+                      <Tooltip
+                        key={f.key}
+                        content={
+                          isVariantField
+                            ? "This is a variant field. Filtering happens server-side (snapshot)."
+                            : undefined
+                        }
+                      >
+                        <Tag
+                          onRemove={() => onRemoveFilter(f.key)}
+                          disabled={isVariantField} // cannot remove here if you want, optional
+                        >
+                          {fieldLabel(f.key)} — {desc}
+                        </Tag>
+                      </Tooltip>
                     );
                   })}
                 </InlineStack>
