@@ -1,101 +1,163 @@
 // web/graphql/filtering/planFilterResolver.ts
-import type { FilterExpr } from "../../lib/filters/dsl.js";
+
+import type { GraphQLFieldResolver } from "graphql";
 import {
-  FILTER_REGISTRY,
-  type FilterRegistry,
-  type FilterDefinition,
-} from "../../lib/filters/registry.js";
-import { astFromJson } from "../../lib/filters/astFromJson.js";
+  mapPlanFiltersInputToAst,
+  type FilterGroupAst,
+  type PlanFiltersInput,
+} from "./filterInputMapper.js";
+import { fieldSupportedNow } from "../../lib/filters/registry.js";
 
-export type FilterExecutionMode = "FAST_ONLY" | "SNAPSHOT";
+/**
+ * Must match your SDL:
+ *
+ * enum FilterExecutionMode {
+ *   FAST_ONLY
+ *   SNAPSHOT
+ * }
+ */
+type FilterExecutionMode = "FAST_ONLY" | "SNAPSHOT";
 
-type PlanFilterArgs = {
-  input: {
-    filter: unknown; // JSON from client
-  };
-};
+/**
+ * input PlanFilterInput {
+ *   filter: PlanFiltersInput!
+ * }
+ */
+interface PlanFilterInput {
+  filter: PlanFiltersInput;
+}
 
-// Context shape (matches GraphQLContext in schema.ts for what we use here)
-type Context = {
+/**
+ * type PlanFilterPayload {
+ *   planHash: String!
+ *   executionMode: FilterExecutionMode!
+ *   filterSummary: String
+ * }
+ */
+interface PlanFilterPayload {
+  planHash: string;
+  executionMode: FilterExecutionMode;
+  filterSummary: string | null;
+}
+
+/**
+ * Context – keep it minimal here to avoid circular imports with schema.ts.
+ * Your actual Yoga context has at least shopId.
+ */
+interface GraphQLContext {
   shopId: string;
-};
+}
 
-export async function planFilterResolver(
-  _parent: unknown,
-  args: PlanFilterArgs,
-  _ctx: Context,
-) {
-  // Parse JSON → FilterExpr
-  const expr: FilterExpr | null = astFromJson(args.input.filter);
+/* ============================================================
+   Helpers
+   ============================================================ */
 
-  // Decide FAST vs SNAPSHOT based on registry
-  const executionMode: FilterExecutionMode =
-    expr && expressionUsesSnapshot(expr, FILTER_REGISTRY)
-      ? "SNAPSHOT"
-      : "FAST_ONLY";
+/**
+ * Flatten all AppliedFilters in the AST so we can inspect used fields.
+ */
+function collectAllFilters(ast: FilterGroupAst | null): string[] {
+  if (!ast) return [];
+  const keys = new Set<string>();
 
-  // Compute deterministic hash of the AST (non-crypto)
-  const planHash = expr ? computePlanHash(expr) : "default";
+  function walk(node: FilterGroupAst) {
+    for (const clause of node.clauses) {
+      keys.add(clause.key);
+    }
+    for (const child of node.groups) {
+      walk(child);
+    }
+  }
 
-  // Produce a human-readable summary
-  const filterSummary = expr
-    ? summarizeFilter(expr, FILTER_REGISTRY)
-    : "No filter";
+  walk(ast);
+  return Array.from(keys);
+}
+
+/**
+ * Decide execution mode:
+ * - FAST_ONLY  → all fields are supportedNow
+ * - SNAPSHOT  → at least one field is NOT supportedNow
+ */
+function decideExecutionMode(ast: FilterGroupAst | null): FilterExecutionMode {
+  if (!ast) {
+    return "FAST_ONLY";
+  }
+
+  const keys = collectAllFilters(ast);
+  if (keys.length === 0) {
+    return "FAST_ONLY";
+  }
+
+  const hasUnsupported = keys.some((key) => !fieldSupportedNow(key));
+  return hasUnsupported ? "SNAPSHOT" : "FAST_ONLY";
+}
+
+/**
+ * Very simple deterministic hash of the filter AST.
+ * No external libs; stable enough for planHash usage.
+ */
+function computePlanHash(ast: FilterGroupAst | null): string {
+  const json = JSON.stringify(ast ?? null);
+  let hash = 0;
+  for (let i = 0; i < json.length; i += 1) {
+    const chr = json.charCodeAt(i);
+    hash = (hash << 5) - hash + chr;
+    hash |= 0; // convert to 32-bit int
+  }
+  // encode as hex string with a prefix so it's obvious what it is
+  return `pf_${(hash >>> 0).toString(16)}`;
+}
+
+/**
+ * Human-readable summary of the filter plan.
+ */
+function summarizeFilters(ast: FilterGroupAst | null): string {
+  if (!ast) return "No filters";
+
+  let clauseCount = 0;
+  let groupCount = 0;
+
+  function walk(node: FilterGroupAst) {
+    clauseCount += node.clauses.length;
+    groupCount += 1;
+    for (const child of node.groups) {
+      walk(child);
+    }
+  }
+
+  walk(ast);
+
+  const parts: string[] = [];
+  parts.push(`${clauseCount} filter${clauseCount === 1 ? "" : "s"}`);
+  parts.push(`${groupCount} group${groupCount === 1 ? "" : "s"}`);
+  return parts.join(", ");
+}
+
+/* ============================================================
+   Resolver
+   ============================================================ */
+
+/**
+ * Resolver for:
+ *
+ *   planFilter(input: PlanFilterInput!): PlanFilterPayload!
+ */
+export const planFilterResolver: GraphQLFieldResolver<
+  unknown,
+  GraphQLContext,
+  { input: PlanFilterInput }
+> = async (_parent, { input }, _ctx): Promise<PlanFilterPayload> => {
+  const filtersInput = input.filter;
+
+  // Normalize GraphQL input → internal AST
+  const ast = mapPlanFiltersInputToAst(filtersInput);
+
+  const executionMode = decideExecutionMode(ast);
+  const planHash = computePlanHash(ast);
+  const filterSummary = summarizeFilters(ast);
 
   return {
     planHash,
     executionMode,
     filterSummary,
   };
-}
-
-/* ---------------- internal helpers ---------------- */
-
-function expressionUsesSnapshot(
-  expr: FilterExpr,
-  registry: FilterRegistry,
-): boolean {
-  if (expr.type === "group") {
-    return expr.children.some((child) =>
-      expressionUsesSnapshot(child, registry),
-    );
-  }
-
-  const def: FilterDefinition | undefined = registry[expr.filterId];
-  if (!def) return false;
-  return def.plane === "SNAPSHOT";
-}
-
-function computePlanHash(expr: FilterExpr): string {
-  const json = JSON.stringify(expr);
-  let hash = 0;
-  for (let i = 0; i < json.length; i++) {
-    hash = (hash * 31 + json.charCodeAt(i)) | 0;
-  }
-  // Unsigned and hex
-  return `p_${(hash >>> 0).toString(16)}`;
-}
-
-function summarizeFilter(
-  expr: FilterExpr,
-  registry: FilterRegistry,
-): string {
-  const parts: string[] = [];
-  collectSummary(expr, registry, parts);
-  return parts.length ? parts.join(" · ") : "No filter";
-}
-
-function collectSummary(
-  expr: FilterExpr,
-  registry: FilterRegistry,
-  parts: string[],
-): void {
-  if (expr.type === "group") {
-    expr.children.forEach((c) => collectSummary(c, registry, parts));
-    return;
-  }
-
-  const def = registry[expr.filterId];
-  const label = def?.label ?? expr.filterId;
-  parts.push(label);
-}
+};

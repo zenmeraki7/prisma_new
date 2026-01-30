@@ -17,7 +17,10 @@ import {
 
 import { debugVerifySnapshotResolver } from "./debug/debugVerifySnapshotResolver.js";
 
-// Context type
+/* ==========================
+   Context
+========================== */
+
 export type GraphQLContext = {
   shopId: string;
 };
@@ -30,7 +33,7 @@ const typeDefs = /* GraphQL */ `
   scalar DateTime
   scalar JSON
 
-  # --- FAST plane ---
+  # ---------- FAST plane ----------
   type ProductLite {
     id: ID!
     title: String!
@@ -66,13 +69,124 @@ const typeDefs = /* GraphQL */ `
     page: ProductPage!
   }
 
+  # ---------- Filtering ----------
   enum FilterExecutionMode {
     FAST_ONLY
     SNAPSHOT
   }
 
+  enum FilterKind {
+    STRING
+    NUMBER
+    DATE
+    ENUM
+    BOOLEAN
+  }
+
+  enum FilterLogicalOp {
+    AND
+    OR
+  }
+
+enum StringFilterOp {
+  EQUALS
+  NOT_EQUALS
+  CONTAINS
+  NOT_CONTAINS
+  CONTAINS_ANY
+  STARTS_WITH
+  NOT_STARTS_WITH
+  ENDS_WITH
+  CONTAINS_CI
+  EQUALS_CI
+}
+
+
+  enum NumberFilterOp {
+    EQ
+    NEQ
+    GT
+    GTE
+    LT
+    LTE
+    BETWEEN
+  }
+
+  enum DateFilterOp {
+    BEFORE
+    AFTER
+    ON
+  }
+
+  enum EnumFilterOp {
+    IS
+    IS_NOT
+  }
+
+  enum BooleanFilterOp {
+    IS
+  }
+
+  enum FilterFieldKey {
+    PRODUCT_ID
+    PRODUCT_TITLE
+    PRODUCT_VENDOR
+    PRODUCT_STATUS
+    PRODUCT_TAG
+    PRODUCT_PRODUCT_TYPE
+    PRODUCT_CREATED_AT
+    PRODUCT_UPDATED_AT
+    PRODUCT_INVENTORY_QUANTITY
+  }
+
+  input StringFilterBodyInput {
+    op: StringFilterOp!
+    value: String!
+  }
+
+  input NumberFilterBodyInput {
+    op: NumberFilterOp!
+    value: Float!
+    value2: Float
+  }
+
+  input DateFilterBodyInput {
+    op: DateFilterOp!
+    value: String!
+  }
+
+  input EnumFilterBodyInput {
+    op: EnumFilterOp!
+    value: String!
+  }
+
+  input BooleanFilterBodyInput {
+    op: BooleanFilterOp!
+    value: Boolean!
+  }
+
+  input FilterClauseInput {
+    field: FilterFieldKey!
+    kind: FilterKind!
+    string: StringFilterBodyInput
+    number: NumberFilterBodyInput
+    date: DateFilterBodyInput
+    enum: EnumFilterBodyInput
+    boolean: BooleanFilterBodyInput
+  }
+
+  input FilterGroupInput {
+    op: FilterLogicalOp!
+    clauses: [FilterClauseInput!]
+    groups: [FilterGroupInput!]
+  }
+
+  input PlanFiltersInput {
+    root: FilterGroupInput
+  }
+
   input PlanFilterInput {
-    filter: JSON!
+    filter: PlanFiltersInput!
   }
 
   type PlanFilterPayload {
@@ -82,7 +196,7 @@ const typeDefs = /* GraphQL */ `
   }
 
   input ProductsByFilterInput {
-    filter: JSON!
+    filters: PlanFiltersInput
     mode: FilterExecutionMode! = FAST_ONLY
     first: Int! = 50
     after: String
@@ -94,7 +208,7 @@ const typeDefs = /* GraphQL */ `
     planHash: String
   }
 
-  # --- Snapshot plane ---
+  # ---------- Snapshots ----------
   enum SnapshotState {
     PENDING
     RUNNING
@@ -132,6 +246,11 @@ const typeDefs = /* GraphQL */ `
     expiresAt: DateTime
   }
 
+  type PageInfo {
+    hasNextPage: Boolean!
+    endCursor: String
+  }
+
   type SnapshotRunEdge {
     cursor: String!
     node: SnapshotRun!
@@ -159,11 +278,6 @@ const typeDefs = /* GraphQL */ `
     pageInfo: PageInfo!
   }
 
-  type PageInfo {
-    hasNextPage: Boolean!
-    endCursor: String
-  }
-
   type DebugVerifySnapshotPayload {
     ok: Boolean!
     message: String
@@ -171,10 +285,6 @@ const typeDefs = /* GraphQL */ `
   }
 
   type Query {
-    """
-    FAST-plane bootstrap listing for ProductsPage.
-    Optional search is by title / vendor / productType / handle.
-    """
     bootstrapProducts(
       first: Int! = 25
       after: String
@@ -183,24 +293,27 @@ const typeDefs = /* GraphQL */ `
 
     planFilter(input: PlanFilterInput!): PlanFilterPayload!
     productsByFilter(input: ProductsByFilterInput!): ProductsByFilterPage!
+
     snapshotStatus(planHash: String!): SnapshotStatus!
     productsBySnapshot(
       planHash: String!
       first: Int! = 50
       after: String
     ): ProductsBySnapshotPage!
+
     snapshotRuns(first: Int! = 25, after: String): SnapshotRunConnection!
     snapshotRunEvents(
       runId: ID!
       first: Int! = 50
       after: String
     ): SnapshotRunEventConnection!
+
     debugVerifySnapshot(planHash: String!): DebugVerifySnapshotPayload!
   }
 `;
 
 /* ==========================
-   Helpers for cursor
+   Cursor helpers
 ========================== */
 
 function encodeCursor(d: Date): string {
@@ -216,7 +329,6 @@ function decodeCursor(c: string): Date {
 
 const resolvers = {
   ProductLite: {
-    // Resolve tags via ProductTag FAST table
     tags: async (parent: any, _args: unknown, ctx: GraphQLContext) => {
       const rows = await prisma.productTag.findMany({
         where: { shopId: ctx.shopId, productId: parent.id },
@@ -226,32 +338,15 @@ const resolvers = {
     },
   },
 
-  VariantRollup: {
-    minPrice: (parent: any) =>
-      parent.minPrice != null ? Number(parent.minPrice) : null,
-    maxPrice: (parent: any) =>
-      parent.maxPrice != null ? Number(parent.maxPrice) : null,
-    totalInventory: (parent: any) => parent.totalInventory,
-  },
-
   Query: {
-    /*
-     * FAST-plane bootstrap listing
-     * - Paginates by updatedAtShopify (newest first)
-     * - Uses a base64-encoded Date cursor
-     * - Optionally filters by a simple text search
-     */
     bootstrapProducts: async (
       _parent: unknown,
       args: { first: number; after?: string | null; search?: string | null },
       ctx: GraphQLContext,
     ) => {
       const { shopId } = ctx;
-
-      // clamp page size between 1 and 100
       const first = Math.min(Math.max(args.first, 1), 100);
 
-      // FAST sync status
       const syncState = await prisma.fastSyncState.findUnique({
         where: { shopId },
       });
@@ -263,36 +358,26 @@ const resolvers = {
         syncEnqueued: syncState?.syncEnqueued ?? false,
       };
 
-      // Cursor filter based on updatedAtShopify
       const cursorFilter =
         args.after != null
           ? { updatedAtShopify: { lt: decodeCursor(args.after) } }
           : {};
 
-      // Optional simple search
-      const where: any = {
-        shopId,
-        ...cursorFilter,
-      };
+      const where: any = { shopId, ...cursorFilter };
 
-      const search = args.search?.trim();
-      if (search && search.length > 0) {
-        where.AND = [
-          {
-            OR: [
-              { title: { contains: search, mode: "insensitive" } },
-              { vendor: { contains: search, mode: "insensitive" } },
-              { productType: { contains: search, mode: "insensitive" } },
-              { handle: { contains: search, mode: "insensitive" } },
-            ],
-          },
+      if (args.search?.trim()) {
+        where.OR = [
+          { title: { contains: args.search, mode: "insensitive" } },
+          { vendor: { contains: args.search, mode: "insensitive" } },
+          { productType: { contains: args.search, mode: "insensitive" } },
+          { handle: { contains: args.search, mode: "insensitive" } },
         ];
       }
 
       const items = await prisma.productLite.findMany({
         where,
         orderBy: { updatedAtShopify: "desc" },
-        take: first + 1, // one extra to detect next page
+        take: first + 1,
       });
 
       let nextCursor: string | null = null;
@@ -304,25 +389,24 @@ const resolvers = {
         items.length = first;
       }
 
-      return {
-        status,
-        page: { items, nextCursor },
-      };
+      return { status, page: { items, nextCursor } };
     },
 
-    // Existing resolvers
     planFilter: planFilterResolver,
     productsByFilter: productsByFilterResolver,
 
     snapshotStatus: snapshotStatusResolver,
     productsBySnapshot: productsBySnapshotResolver,
-
     snapshotRuns: snapshotRunsResolver,
     snapshotRunEvents: snapshotRunEventsResolver,
 
     debugVerifySnapshot: debugVerifySnapshotResolver,
   },
 };
+
+/* ==========================
+   Schema
+========================== */
 
 export const schema = createSchema({
   typeDefs,
