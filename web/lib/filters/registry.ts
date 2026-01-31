@@ -1,4 +1,4 @@
-// web/lib/filters/registry.ts
+// FILE: web/lib/filters/registry.ts
 
 import type { FilterId, FilterLeafOp } from "./dsl";
 
@@ -84,7 +84,9 @@ export const FILTER_REGISTRY: FilterRegistry = {
     scope: "product",
     operators: ["eq", "in"],
     valueKind: "id",
-    fastField: { model: "ProductLite", field: "id" },
+    // IMPORTANT: in your Prisma schema, the Shopify id is `productId`,
+    // and `id` is the BigInt PK. We filter on productId here.
+    fastField: { model: "ProductLite", field: "productId" },
   },
 
   "product.title": {
@@ -146,6 +148,8 @@ export const FILTER_REGISTRY: FilterRegistry = {
     scope: "product",
     operators: ["contains", "not_contains", "in", "not_in"],
     valueKind: "stringList",
+    // Logical model is ProductTag join; fastCompiler will translate to
+    // the ProductLite.tagsJoin relation.
     fastField: { model: "ProductTag", field: "tag" },
   },
 
@@ -196,7 +200,7 @@ export const FILTER_REGISTRY: FilterRegistry = {
   "product.createdAt": {
     id: "product.createdAt",
     label: "Created at",
-    plane: "SNAPSHOT", // not stored in ProductLite by default
+    plane: "SNAPSHOT", // you *could* flip this to FAST via createdAtShopify later
     scope: "product",
     operators: ["gt", "gte", "lt", "lte", "between"],
     valueKind: "datetime",
@@ -206,7 +210,7 @@ export const FILTER_REGISTRY: FilterRegistry = {
   "product.updatedAt": {
     id: "product.updatedAt",
     label: "Updated at",
-    plane: "FAST", // we have updatedAtShopify in ProductLite
+    plane: "FAST", // mapped to ProductLite.updatedAtShopify
     scope: "product",
     operators: ["gt", "gte", "lt", "lte", "between"],
     valueKind: "datetime",
@@ -216,7 +220,7 @@ export const FILTER_REGISTRY: FilterRegistry = {
   "product.publishedAt": {
     id: "product.publishedAt",
     label: "Published at",
-    plane: "SNAPSHOT",
+    plane: "SNAPSHOT", // you have publishedAtShopify; can flip to FAST if you want
     scope: "product",
     operators: ["gt", "gte", "lt", "lte", "between", "is_set", "is_not_set"],
     valueKind: "datetime",
@@ -292,7 +296,7 @@ export const FILTER_REGISTRY: FilterRegistry = {
   "variant.price": {
     id: "variant.price",
     label: "Variant price",
-    plane: "SNAPSHOT", // if you later roll into VariantRollup, can switch to FAST
+    plane: "SNAPSHOT", // can later roll up into FAST if needed
     scope: "variant",
     operators: ["gt", "gte", "lt", "lte", "between", "eq"],
     valueKind: "number",
@@ -314,7 +318,7 @@ export const FILTER_REGISTRY: FilterRegistry = {
   "variant.inventoryQuantity": {
     id: "variant.inventoryQuantity",
     label: "Variant inventory quantity",
-    plane: "SNAPSHOT", // totalInventory already covered in FAST as product.totalInventory
+    plane: "SNAPSHOT", // product.totalInventory is FAST
     scope: "variant",
     operators: ["gt", "gte", "lt", "lte", "between", "eq"],
     valueKind: "int",

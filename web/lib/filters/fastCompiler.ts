@@ -1,4 +1,4 @@
-// web/lib/filters/fastCompiler.ts
+// FILE: web/lib/filters/fastCompiler.ts
 
 import type { Prisma } from "@prisma/client";
 import type { FilterExpr, FilterLeafExpr, FilterLeafOp } from "./dsl";
@@ -17,7 +17,7 @@ type ProductWhere = Prisma.ProductLiteWhereInput;
  */
 export function compileFastWhere(
   expr: FilterExpr | null | undefined,
-  registry: FilterRegistry
+  registry: FilterRegistry,
 ): ProductWhere {
   if (!expr) return {};
   return compileExpr(expr, registry);
@@ -36,7 +36,7 @@ function compileExpr(expr: FilterExpr, registry: FilterRegistry): ProductWhere {
 
 function compileGroup(
   group: Extract<FilterExpr, { type: "group" }>,
-  registry: FilterRegistry
+  registry: FilterRegistry,
 ): ProductWhere {
   const { op, children } = group;
 
@@ -53,7 +53,9 @@ function compileGroup(
     return { NOT: childWhere };
   }
 
-  const compiledChildren = children.map((child) => compileExpr(child, registry));
+  const compiledChildren = children.map((child) =>
+    compileExpr(child, registry),
+  );
 
   if (op === "and") {
     return { AND: compiledChildren };
@@ -71,25 +73,25 @@ function compileGroup(
 
 function compileLeaf(
   leaf: FilterLeafExpr,
-  registry: FilterRegistry
+  registry: FilterRegistry,
 ): ProductWhere {
   const def = getFilterDef(leaf.filterId);
 
   if (def.plane !== "FAST") {
     throw new Error(
-      `FAST compiler: filterId "${def.id}" is plane=${def.plane}, cannot compile into FAST plane.`
+      `FAST compiler: filterId "${def.id}" is plane=${def.plane}, cannot compile into FAST plane.`,
     );
   }
 
   if (!def.fastField) {
     throw new Error(
-      `FAST compiler: filterId "${def.id}" has plane=FAST but missing fastField descriptor.`
+      `FAST compiler: filterId "${def.id}" has plane=FAST but missing fastField descriptor.`,
     );
   }
 
   if (!def.operators.includes(leaf.op)) {
     throw new Error(
-      `FAST compiler: operator "${leaf.op}" not allowed for filterId "${def.id}".`
+      `FAST compiler: operator "${leaf.op}" not allowed for filterId "${def.id}".`,
     );
   }
 
@@ -107,7 +109,7 @@ function compileLeaf(
       return compileVariantRollupField(def, leaf.op, value);
     default:
       throw new Error(
-        `FAST compiler: Unsupported fastField model "${def.fastField.model}" for filterId "${def.id}".`
+        `FAST compiler: Unsupported fastField model "${def.fastField.model}" for filterId "${def.id}".`,
       );
   }
 }
@@ -119,7 +121,7 @@ function compileLeaf(
 function normalizeValue(
   kind: FilterValueKind,
   op: FilterLeafOp,
-  raw: unknown
+  raw: unknown,
 ): unknown {
   // Unary ops do not require a value
   if (op === "is_set" || op === "is_not_set") {
@@ -128,7 +130,7 @@ function normalizeValue(
 
   if (raw === undefined || raw === null) {
     throw new Error(
-      `FAST compiler: value is required for operator "${op}" (valueKind=${kind}).`
+      `FAST compiler: value is required for operator "${op}" (valueKind=${kind}).`,
     );
   }
 
@@ -136,7 +138,7 @@ function normalizeValue(
     case "string":
       if (typeof raw !== "string") {
         throw new Error(
-          `FAST compiler: expected string value, got ${typeof raw}.`
+          `FAST compiler: expected string value, got ${typeof raw}.`,
         );
       }
       return raw;
@@ -146,14 +148,14 @@ function normalizeValue(
         const allStrings = raw.every((v) => typeof v === "string");
         if (!allStrings) {
           throw new Error(
-            `FAST compiler: expected string[] for stringList filter, got non-string element.`
+            `FAST compiler: expected string[] for stringList filter, got non-string element.`,
           );
         }
         return raw;
       }
       if (typeof raw === "string") return [raw];
       throw new Error(
-        `FAST compiler: expected string|string[] for stringList filter, got ${typeof raw}.`
+        `FAST compiler: expected string|string[] for stringList filter, got ${typeof raw}.`,
       );
 
     case "number":
@@ -165,12 +167,14 @@ function normalizeValue(
       const num = Number(raw);
       if (!Number.isFinite(num)) {
         throw new Error(
-          `FAST compiler: expected numeric value for ${kind}, got ${String(raw)}.`
+          `FAST compiler: expected numeric value for ${kind}, got ${String(
+            raw,
+          )}.`,
         );
       }
       if (kind === "int" && !Number.isInteger(num)) {
         throw new Error(
-          `FAST compiler: expected integer value, got ${num}.`
+          `FAST compiler: expected integer value, got ${num}.`,
         );
       }
       return num;
@@ -179,7 +183,7 @@ function normalizeValue(
     case "boolean":
       if (typeof raw !== "boolean") {
         throw new Error(
-          `FAST compiler: expected boolean value, got ${typeof raw}.`
+          `FAST compiler: expected boolean value, got ${typeof raw}.`,
         );
       }
       return raw;
@@ -199,8 +203,8 @@ function normalizeValue(
       if (!d || Number.isNaN(d.getTime())) {
         throw new Error(
           `FAST compiler: expected datetime (string or Date), got: ${String(
-            raw
-          )}.`
+            raw,
+          )}.`,
         );
       }
       return d;
@@ -211,7 +215,7 @@ function normalizeValue(
         const ids = raw.map((v) => {
           if (typeof v !== "string") {
             throw new Error(
-              `FAST compiler: id list must be string[], got non-string element.`
+              `FAST compiler: id list must be string[], got non-string element.`,
             );
           }
           return v;
@@ -220,21 +224,21 @@ function normalizeValue(
       }
       if (typeof raw === "string") return raw;
       throw new Error(
-        `FAST compiler: expected string|string[] for id valueKind, got ${typeof raw}.`
+        `FAST compiler: expected string|string[] for id valueKind, got ${typeof raw}.`,
       );
 
     // FAST plane should not see metafield/fulltext, but guard anyway.
     case "metafield":
     case "fulltext":
       throw new Error(
-        `FAST compiler: valueKind "${kind}" should not be compiled in FAST plane.`
+        `FAST compiler: valueKind "${kind}" should not be compiled in FAST plane.`,
       );
 
     default: {
       // Exhaustive guard
       const _never: never = kind;
       throw new Error(
-        `FAST compiler: unsupported valueKind "${String(_never)}".`
+        `FAST compiler: unsupported valueKind "${String(_never)}".`,
       );
     }
   }
@@ -247,29 +251,24 @@ function normalizeBetweenNumeric(raw: unknown): [number, number] {
     const n2 = Number(b);
     if (!Number.isFinite(n1) || !Number.isFinite(n2)) {
       throw new Error(
-        `FAST compiler: "between" for numeric must be [number, number].`
+        `FAST compiler: "between" for numeric must be [number, number].`,
       );
     }
     return n1 <= n2 ? [n1, n2] : [n2, n1];
   }
-  if (
-    typeof raw === "object" &&
-    raw !== null &&
-    "min" in raw &&
-    "max" in raw
-  ) {
+  if (typeof raw === "object" && raw !== null && "min" in raw && "max" in raw) {
     const anyRaw = raw as { min: unknown; max: unknown };
     const n1 = Number(anyRaw.min);
     const n2 = Number(anyRaw.max);
     if (!Number.isFinite(n1) || !Number.isFinite(n2)) {
       throw new Error(
-        `FAST compiler: "between" for numeric must be { min, max } with numeric values.`
+        `FAST compiler: "between" for numeric must be { min, max } with numeric values.`,
       );
     }
     return n1 <= n2 ? [n1, n2] : [n2, n1];
   }
   throw new Error(
-    `FAST compiler: "between" for numeric expects [min,max] or {min,max}.`
+    `FAST compiler: "between" for numeric expects [min,max] or {min,max}.`,
   );
 }
 
@@ -280,19 +279,14 @@ function normalizeBetweenDate(raw: unknown): [Date, Date] {
     const d2 = toDate(b);
     return d1 <= d2 ? [d1, d2] : [d2, d1];
   }
-  if (
-    typeof raw === "object" &&
-    raw !== null &&
-    "from" in raw &&
-    "to" in raw
-  ) {
+  if (typeof raw === "object" && raw !== null && "from" in raw && "to" in raw) {
     const anyRaw = raw as { from: unknown; to: unknown };
     const d1 = toDate(anyRaw.from);
     const d2 = toDate(anyRaw.to);
     return d1 <= d2 ? [d1, d2] : [d2, d1];
   }
   throw new Error(
-    `FAST compiler: "between" for datetime expects [from,to] or {from,to}.`
+    `FAST compiler: "between" for datetime expects [from,to] or {from,to}.`,
   );
 }
 
@@ -303,7 +297,7 @@ function toDate(value: unknown): Date {
     if (!Number.isNaN(d.getTime())) return d;
   }
   throw new Error(
-    `FAST compiler: invalid datetime value in "between": ${String(value)}.`
+    `FAST compiler: invalid datetime value in "between": ${String(value)}.`,
   );
 }
 
@@ -314,7 +308,7 @@ function toDate(value: unknown): Date {
 function compileProductLiteField(
   def: FilterDefinition,
   op: FilterLeafOp,
-  value: unknown
+  value: unknown,
 ): ProductWhere {
   const field = def.fastField!.field as keyof Prisma.ProductLiteWhereInput;
 
@@ -370,7 +364,7 @@ function compileProductLiteField(
 
     default:
       throw new Error(
-        `FAST compiler: unsupported op "${op}" for ProductLite field "${field}".`
+        `FAST compiler: unsupported op "${op}" for ProductLite field "${field}".`,
       );
   }
 }
@@ -385,26 +379,29 @@ function compileProductLiteField(
 function compileProductTagField(
   def: FilterDefinition,
   op: FilterLeafOp,
-  value: unknown
+  value: unknown,
 ): ProductWhere {
   const values = asArray(value).map((v) => String(v));
-  const relation: Prisma.ProductLiteWhereInput["tags"] = {
+
+  // We don't rely on the TS type here because some generated clients
+  // (older schema) may not yet expose `tagsJoin` on ProductLiteWhereInput.
+  const relation = {
     some: { tag: { in: values } },
   };
-  const noneRelation: Prisma.ProductLiteWhereInput["tags"] = {
+  const noneRelation = {
     none: { tag: { in: values } },
   };
 
   switch (op) {
     case "contains":
     case "in":
-      return { tags: relation };
+      return { tagsJoin: relation } as ProductWhere;
     case "not_contains":
     case "not_in":
-      return { tags: noneRelation };
+      return { tagsJoin: noneRelation } as ProductWhere;
     default:
       throw new Error(
-        `FAST compiler: unsupported op "${op}" for ProductTag-based filter "${def.id}".`
+        `FAST compiler: unsupported op "${op}" for ProductTag-based filter "${def.id}".`,
       );
   }
 }
@@ -415,7 +412,7 @@ function compileProductTagField(
 function compileProductCollectionField(
   def: FilterDefinition,
   op: FilterLeafOp,
-  value: unknown
+  value: unknown,
 ): ProductWhere {
   const values = asArray(value).map((v) => String(v));
   const relation: Prisma.ProductLiteWhereInput["collections"] = {
@@ -432,7 +429,7 @@ function compileProductCollectionField(
       return { collections: noneRelation };
     default:
       throw new Error(
-        `FAST compiler: unsupported op "${op}" for ProductCollection-based filter "${def.id}".`
+        `FAST compiler: unsupported op "${op}" for ProductCollection-based filter "${def.id}".`,
       );
   }
 }
@@ -444,7 +441,7 @@ function compileProductCollectionField(
 function compileVariantRollupField(
   def: FilterDefinition,
   op: FilterLeafOp,
-  value: unknown
+  value: unknown,
 ): ProductWhere {
   const field =
     def.fastField!.field as keyof Prisma.VariantRollupWhereInput;
@@ -473,11 +470,15 @@ function compileVariantRollupField(
     case "gt":
       return make({ [field]: { gt: value } } as Prisma.VariantRollupWhereInput);
     case "gte":
-      return make({ [field]: { gte: value } } as Prisma.VariantRollupWhereInput);
+      return make({
+        [field]: { gte: value },
+      } as Prisma.VariantRollupWhereInput);
     case "lt":
       return make({ [field]: { lt: value } } as Prisma.VariantRollupWhereInput);
     case "lte":
-      return make({ [field]: { lte: value } } as Prisma.VariantRollupWhereInput);
+      return make({
+        [field]: { lte: value },
+      } as Prisma.VariantRollupWhereInput);
 
     case "between": {
       const [from, to] = value as [unknown, unknown];
@@ -497,7 +498,7 @@ function compileVariantRollupField(
 
     default:
       throw new Error(
-        `FAST compiler: unsupported op "${op}" for VariantRollup-based filter "${def.id}".`
+        `FAST compiler: unsupported op "${op}" for VariantRollup-based filter "${def.id}".`,
       );
   }
 }

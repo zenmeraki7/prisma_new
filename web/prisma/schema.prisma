@@ -1,249 +1,225 @@
-generator client {
-  provider = "prisma-client-js"
-}
+// prisma/schema.prisma
 
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
-/* =====================
-   ENUMS
-   ===================== */
-
-enum SnapshotState {
-  PENDING
-  RUNNING
-  SUCCEEDED
-  FAILED
-  EXPIRED
+generator client {
+  provider = "prisma-client-js"
 }
 
-enum SnapshotRunEventKind {
-  INFO
-  WARNING
-  ERROR
-}
+/// ----------------------------------------------------
+/// FAST Plane Models for Shopify Public App
+/// ----------------------------------------------------
 
-enum BulkJobState {
-  PENDING
-  RUNNING
-  SUCCEEDED
-  FAILED
-  CANCELLED
-}
-
-/* =====================
-   CORE SHOP MODEL
-   ===================== */
-
-model Shop {
-  id          String   @id @default(cuid())
-  shopDomain  String   @unique
-  accessToken String
-
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  // FAST plane
-  productLites   ProductLite[]
-  fastSyncState  FastSyncState?
-
-  // SNAPSHOT plane
-  snapshotRuns     SnapshotRun[]
-  snapshotProducts SnapshotProduct[]
-  snapshotEvents   SnapshotRunEvent[]
-
-  // Bulk jobs
-  bulkOpsJobs   BulkOpsJob[]
-  bulkOpsEvents BulkOpsJobEvent[]
-
-  // Idempotency
-  idempotencyLedger IdempotencyLedger[]
-}
-
-/* =====================
-   FAST PLANE
-   ===================== */
-
+/// Lean per-product FAST plane row.
+/// One row per (shopId, productId)
 model ProductLite {
-  /// Shopify Product GID
-  id               String
-  shopId           String
-  title            String
-  handle           String
-  status           String
-  vendor           String?
-  productType      String?
-  hasImages        Boolean   @default(false)
-  updatedAtShopify DateTime?
+  id        BigInt  @id @default(autoincrement())
+  shopId    String
+  productId String      // Shopify GID or numeric ID as string
 
-  shop         Shop              @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  tags         ProductTag[]
-  collections  ProductCollection[]
-  variantRollup VariantRollup?
+  // Core identity / metadata
+  title       String
+  handle      String
+  status      String     // ACTIVE | DRAFT | ARCHIVED
+  vendor      String?
+  productType String?    @map("product_type")
+  category    String?    // Your own classification
+  description String?    // Product description
 
-  @@id([shopId, id])
-  @@index([shopId, status])
-  @@index([shopId, vendor])
-  @@index([shopId, productType])
-  @@index([shopId, updatedAtShopify])
+  createdAtShopify   DateTime @map("created_at_shopify")
+  updatedAtShopify   DateTime @map("updated_at_shopify")
+  publishedAtShopify DateTime? @map("published_at_shopify")
+
+  // Visibility / SEO
+  isSearchable       Boolean @default(true) @map("is_searchable")
+  visibleOnlineStore Boolean @default(true) @map("visible_online_store")
+  visiblePos         Boolean @default(false) @map("visible_pos")
+  templateSuffix     String? @map("template_suffix")
+
+  // Option names
+  option1Name String? @map("option1_name")
+  option2Name String? @map("option2_name")
+  option3Name String? @map("option3_name")
+
+  // Tags (Postgres text[])
+  tags String[] @default([])
+
+  // Denormalized FAST plane fields
+  hasImages      Boolean @default(false)
+  minPrice       Decimal? @map("min_price")
+  maxPrice       Decimal? @map("max_price")
+  totalInventory Int? @map("total_inventory")
+  variantCount   Int? @map("variant_count")
+
+  // Relations
+  variantRollup  VariantRollup?
+  tagsJoin       ProductTag[]
+  collections    ProductCollection[]
+  variants       VariantLite[]
+  optionValues   ProductOptionValue[]
+  inventoryByLoc ProductInventoryLocation[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([shopId, productId], map: "product_lite_shop_product_uniq")
+  @@index([shopId, status, id])
+  @@index([shopId, vendor, id])
+  @@index([shopId, productType, id])
+  @@index([shopId, createdAtShopify, id])
+  @@index([shopId, updatedAtShopify, id])
+  @@index([shopId, publishedAtShopify, id])
+  @@index([shopId, handle])
+  @@index([shopId, title])
+  @@index([tags], type: Gin) // GIN index for fast tag filtering
 }
 
+/// Rollups per product for variant stats
+model VariantRollup {
+  id        BigInt @id @default(autoincrement())
+  shopId    String
+  productId String
+
+  // Price / cost
+  minPrice Decimal  @map("min_price")
+  maxPrice Decimal  @map("max_price")
+  minCompareAtPrice Decimal? @map("min_compare_at_price")
+  maxCompareAtPrice Decimal? @map("max_compare_at_price")
+  minCost Decimal? @map("min_cost")
+  maxCost Decimal? @map("max_cost")
+
+  // Inventory
+  totalInventory Int @map("total_inventory")
+  minInventoryPerVariant Int? @map("min_inventory_per_variant")
+  maxInventoryPerVariant Int? @map("max_inventory_per_variant")
+  variantCount Int @map("variant_count")
+
+  // Boolean rollups
+  anyTaxable Boolean @default(false) @map("any_taxable")
+  allTaxable Boolean @default(false) @map("all_taxable")
+  anyTrackQuantity Boolean @default(false) @map("any_track_quantity")
+  allTrackQuantity Boolean @default(false) @map("all_track_quantity")
+  anyContinueSelling Boolean @default(false) @map("any_continue_selling")
+  allContinueSelling Boolean @default(false) @map("all_continue_selling")
+  hasPhysical Boolean @default(false) @map("has_physical")
+
+  // Margins
+  minMargin Decimal? @map("min_margin")
+  maxMargin Decimal? @map("max_margin")
+
+  // Weight (grams)
+  minWeightGrams Int? @map("min_weight_grams")
+  maxWeightGrams Int? @map("max_weight_grams")
+
+  product ProductLite @relation(fields: [shopId, productId], references: [shopId, productId])
+
+  @@unique([shopId, productId])
+  @@index([shopId, totalInventory, id])
+  @@index([shopId, minPrice, id])
+  @@index([shopId, maxPrice, id])
+  @@index([shopId, variantCount, id])
+  @@index([shopId, minMargin, id])
+  @@index([shopId, maxMargin, id])
+  @@index([shopId, minWeightGrams, id])
+  @@index([shopId, maxWeightGrams, id])
+}
+
+/// Optional normalized tags table (classic join)
 model ProductTag {
+  id        BigInt @id @default(autoincrement())
   shopId    String
   productId String
   tag       String
 
-  product   ProductLite @relation(fields: [shopId, productId], references: [shopId, id], onDelete: Cascade)
+  product ProductLite @relation(fields: [shopId, productId], references: [shopId, productId])
 
-  @@id([shopId, productId, tag])
-  @@index([shopId, tag])
+  @@unique([shopId, productId, tag])
+  @@index([shopId, tag, productId])
 }
 
+/// Product ↔ Collection mapping
 model ProductCollection {
+  id           BigInt @id @default(autoincrement())
   shopId       String
   productId    String
   collectionId String
+  collectionHandle String? @map("collection_handle")
+  collectionTitle  String? @map("collection_title")
 
-  product      ProductLite @relation(fields: [shopId, productId], references: [shopId, id], onDelete: Cascade)
+  product ProductLite @relation(fields: [shopId, productId], references: [shopId, productId])
 
-  @@id([shopId, productId, collectionId])
-  @@index([shopId, collectionId])
+  @@unique([shopId, productId, collectionId])
+  @@index([shopId, collectionId, productId])
 }
 
-model VariantRollup {
-  shopId         String
-  productId      String
-  minPrice       Decimal?  @db.Decimal(18, 2)
-  maxPrice       Decimal?  @db.Decimal(18, 2)
-  totalInventory Int?
-
-  product        ProductLite @relation(fields: [shopId, productId], references: [shopId, id], onDelete: Cascade)
-
-  @@id([shopId, productId])
-  @@index([shopId, totalInventory])
-}
-
-model FastSyncState {
-  shopId         String  @id
-  fastReady      Boolean  @default(false)
-  fastLastSyncAt DateTime?
-  fastRevision   Int      @default(0)
-  syncEnqueued   Boolean  @default(false)
-
-  shop           Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
-}
-
-/* =====================
-   SNAPSHOT PLANE
-   ===================== */
-
-model SnapshotRun {
-  id            String        @id @default(cuid())
-  shopId        String
-  shop          Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
-
-  planHash      String
-  filterSummary String?
-  state         SnapshotState @default(PENDING)
-  progress      Int           @default(0)
-  total         Int           @default(0)
-  errorMessage  String?
-
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
-  expiresAt     DateTime?
-
-  events        SnapshotRunEvent[]
-  products      SnapshotProduct[]
-
-  @@index([shopId, planHash])
-  @@index([shopId, createdAt])
-  @@index([state])
-  @@index([expiresAt])
-}
-
-model SnapshotProduct {
-  snapshotRunId String
-  shopId        String
-  productId     String
-  sortKey       DateTime?
-
-  snapshotRun   SnapshotRun @relation(fields: [snapshotRunId], references: [id], onDelete: Cascade)
-  shop          Shop        @relation(fields: [shopId], references: [id], onDelete: Cascade)
-
-  @@id([snapshotRunId, productId])
-  @@index([shopId, productId])
-}
-
-model SnapshotRunEvent {
-  id            String               @id @default(cuid())
-  snapshotRunId String
-  shopId        String
-  kind          SnapshotRunEventKind @default(INFO)
-  message       String?
-  createdAt     DateTime             @default(now())
-
-  snapshotRun   SnapshotRun @relation(fields: [snapshotRunId], references: [id], onDelete: Cascade)
-  shop          Shop        @relation(fields: [shopId], references: [id], onDelete: Cascade)
-
-  @@index([snapshotRunId, createdAt])
-  @@index([shopId, createdAt])
-}
-
-/* =====================
-   BULK JOBS
-   ===================== */
-
-model BulkOpsJob {
-  id            String       @id @default(cuid())
-  shopId        String
-  scopeType     String
-  scopeRef      String
-  actionKind    String
-  actionPayload Json
-  state         BulkJobState @default(PENDING)
-  total         Int          @default(0)
-  processed     Int          @default(0)
-  errorMessage  String?
-  createdAt     DateTime     @default(now())
-  updatedAt     DateTime     @updatedAt
-
-  shop          Shop         @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  events        BulkOpsJobEvent[]
-
-  @@index([shopId, createdAt])
-  @@index([shopId, state])
-}
-
-model BulkOpsJobEvent {
-  id        String     @id @default(cuid())
-  jobId     String
+/// Lean per-variant FAST table
+model VariantLite {
+  id        BigInt @id @default(autoincrement())
   shopId    String
-  kind      String
-  message   String?
-  createdAt DateTime   @default(now())
+  variantId String
+  productId String
 
-  job       BulkOpsJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  shop      Shop       @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  sku     String? 
+  barcode String? 
 
-  @@index([jobId, createdAt])
-  @@index([shopId, createdAt])
+  price          Decimal
+  compareAtPrice Decimal? 
+  cost           Decimal?
+
+  taxable        Boolean? 
+  trackQuantity  Boolean?
+  inventoryQty   Int
+  inventoryPolicy String? 
+
+  weightGrams Int?
+  weightUnit  String?
+
+  option1Value String?
+  option2Value String?
+  option3Value String?
+
+  // NEW fields
+  title String?           // Variant title
+  countryOfOrigin String? // Country of origin
+  hsTariffCode String?    // HS Tariff code
+
+  product ProductLite @relation(fields: [shopId, productId], references: [shopId, productId])
+
+  @@unique([shopId, variantId])
+  @@index([shopId, productId, id])
+  @@index([shopId, sku])
+  @@index([shopId, barcode])
+  @@index([shopId, price])
 }
 
-/* =====================
-   IDEMPOTENCY
-   ===================== */
-
-model IdempotencyLedger {
-  id        String   @id @default(cuid())
+/// Normalized option values per product
+model ProductOptionValue {
+  id        BigInt @id @default(autoincrement())
   shopId    String
-  scope     String
-  key       String
-  createdAt DateTime @default(now())
+  productId String
+  optionIndex Int
+  value       String
 
-  shop      Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  product ProductLite @relation(fields: [shopId, productId], references: [shopId, productId])
 
-  @@unique([shopId, scope, key])
+  @@unique([shopId, productId, optionIndex, value])
+  @@index([shopId, optionIndex, value, productId])
+}
+
+/// Per-product, per-location availability
+model ProductInventoryLocation {
+  id        BigInt @id @default(autoincrement())
+  shopId    String
+  productId String
+  locationId String
+  hasInventory Boolean @default(false)
+  totalQuantity Int?
+
+  product ProductLite @relation(fields: [shopId, productId], references: [shopId, productId])
+
+  @@unique([shopId, productId, locationId])
+  @@index([shopId, locationId, productId])
 }
