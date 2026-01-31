@@ -1,4 +1,3 @@
-// prisma/schema.prisma
 generator client {
   provider = "prisma-client-js"
 }
@@ -21,6 +20,7 @@ enum JobStatus {
   FAILED
 }
 
+/// Shop state tracking
 model ShopState {
   shopId         String   @id
   fastReady      Boolean  @default(false)
@@ -31,8 +31,9 @@ model ShopState {
   updatedAt DateTime @updatedAt
 }
 
+/// Main FAST-plane product table
 model ProductLite {
-  id          String   @id // Shopify Product GID (stable, no extra mapping needed)
+  id          String   @id // Shopify Product GID
   shopId      String
   title       String
   handle      String
@@ -46,41 +47,50 @@ model ProductLite {
   updatedAtShopify   DateTime?
   publishedAtShopify DateTime?
 
-  // for sorting/paging in UI:
   updatedAt DateTime @default(now()) @updatedAt
+
+  variantRollup VariantRollup?
+  variants     VariantLite[]
+  tagsJoin     ProductTag[]
+  collections  ProductCollection[]
+  optionValues ProductOptionValue[]
+  inventoryByLoc ProductInventoryLocation[]
 
   @@index([shopId, updatedAtShopify(sort: Desc)])
   @@index([shopId, title])
   @@unique([shopId, id])
 }
 
+/// Rollup per product for fast filters
 model VariantRollup {
-  // One row per product. Keep it tiny and indexed.
   shopId    String
   productId String
 
-  variantCount          Int     @default(0)
-  totalInventory        Int     @default(0)
-  minPrice              Decimal? @db.Decimal(18, 6)
-  maxPrice              Decimal? @db.Decimal(18, 6)
-  hasOutOfStockVariant  Boolean @default(false)
-  hasInStockVariant     Boolean @default(false)
+  variantCount         Int     @default(0)
+  totalInventory       Int     @default(0)
+  minPrice             Decimal? @db.Decimal(18, 6)
+  maxPrice             Decimal? @db.Decimal(18, 6)
+  hasOutOfStockVariant Boolean @default(false)
+  hasInStockVariant    Boolean @default(false)
 
   updatedAt DateTime @default(now()) @updatedAt
 
+  product ProductLite @relation(fields: [shopId, productId], references: [shopId, id])
+
   @@id([shopId, productId])
   @@index([shopId, totalInventory])
+  @@index([shopId, minPrice])
+  @@index([shopId, maxPrice])
 }
 
+/// Job ledger for background jobs
 model JobLedger {
   id        String    @id @default(cuid())
   shopId    String
   type      JobType
   status    JobStatus @default(PENDING)
 
-  // BullMQ job id, if applicable
   queueJobId String?
-
   startedAt  DateTime?
   finishedAt DateTime?
   error      String?
@@ -90,4 +100,95 @@ model JobLedger {
 
   @@index([shopId, type, status])
   @@index([shopId, createdAt])
+}
+
+/// Optional relational tags table
+model ProductTag {
+  id        BigInt  @id @default(autoincrement())
+  shopId    String
+  productId String
+  tag       String
+
+  product ProductLite @relation(fields: [shopId, productId], references: [shopId, id])
+
+  @@unique([shopId, productId, tag])
+  @@index([shopId, tag, productId])
+}
+
+/// Collections mapping table
+model ProductCollection {
+  id           BigInt  @id @default(autoincrement())
+  shopId       String
+  productId    String
+  collectionId String
+  collectionHandle String?
+  collectionTitle  String?
+
+  product ProductLite @relation(fields: [shopId, productId], references: [shopId, id])
+
+  @@unique([shopId, productId, collectionId])
+  @@index([shopId, collectionId, productId])
+}
+
+/// Per-variant FAST table
+model VariantLite {
+  id        BigInt  @id @default(autoincrement())
+  shopId    String
+  variantId String
+  productId String
+
+  sku     String?
+  barcode String?
+  price   Decimal @db.Decimal(18,6)
+  compareAtPrice Decimal?
+  cost    Decimal?
+
+  taxable       Boolean?
+  trackQuantity Boolean?
+  inventoryQty  Int
+  inventoryPolicy String?
+
+  weightGrams Int?
+  weightUnit  String?
+
+  option1Value String?
+  option2Value String?
+  option3Value String?
+
+  product ProductLite @relation(fields: [shopId, productId], references: [shopId, id])
+
+  @@unique([shopId, variantId])
+  @@index([shopId, productId])
+  @@index([shopId, sku])
+  @@index([shopId, barcode])
+  @@index([shopId, price])
+}
+
+/// Product option values (1,2,3)
+model ProductOptionValue {
+  id        BigInt  @id @default(autoincrement())
+  shopId    String
+  productId String
+  optionIndex Int
+  value       String
+
+  product ProductLite @relation(fields: [shopId, productId], references: [shopId, id])
+
+  @@unique([shopId, productId, optionIndex, value])
+  @@index([shopId, optionIndex, value, productId])
+}
+
+/// Inventory per location
+model ProductInventoryLocation {
+  id        BigInt  @id @default(autoincrement())
+  shopId    String
+  productId String
+  locationId String
+  hasInventory Boolean @default(false)
+  totalQuantity Int?
+
+  product ProductLite @relation(fields: [shopId, productId], references: [shopId, id])
+
+  @@unique([shopId, productId, locationId])
+  @@index([shopId, locationId, productId])
 }

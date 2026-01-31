@@ -1,3 +1,4 @@
+// web/frontend/hooks/useBootstrapProducts.ts
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import {
@@ -71,7 +72,7 @@ export function useBootstrapProducts() {
         inFlightRef.current = false;
       }
     },
-    [app]
+    [app],
   );
 
   const loadInitial = useCallback(() => {
