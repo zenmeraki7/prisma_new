@@ -563,7 +563,7 @@ app.post("/api/graphql", async (req, res) => {
         const first = Number(input.first ?? 50);
         const after = input.after ?? null;
         const filterExpr = input.filter || null;
-         const mode = input.mode || "FAST_ONLY"; 
+
         // console.log(`🔍 productsByFilter called:`, {
         //   first,
         //   after,

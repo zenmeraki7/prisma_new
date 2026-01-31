@@ -111,12 +111,7 @@ export default function ExportPage() {
 
   const [format, setFormat] = useState<ExportFormat>("csv");
   const [exportName, setExportName] = useState("Selected Products Export");
-  const [selectedFields, setSelectedFields] = useState<string[]>([
-    "title",
-    "price",
-    "vendor",
-    "status",
-  ]);
+ 
 
   const [snapshotRunId, setSnapshotRunId] = useState<string | null>(null);
   const [message, setMessage] = useState<{
@@ -190,20 +185,6 @@ export default function ExportPage() {
     downloadExport.mutate();
   };
 
-  const fieldOptions = [
-    { label: "Product Title", value: "title" },
-    { label: "Price", value: "price" },
-    { label: "Vendor", value: "vendor" },
-    { label: "Product Type", value: "type" },
-    { label: "Status", value: "status" },
-    { label: "Tags", value: "tags" },
-    { label: "Inventory", value: "inventory" },
-    { label: "Handle", value: "handle" },
-  ];
-
-  const mid = Math.ceil(fieldOptions.length / 2);
-  const leftFields = fieldOptions.slice(0, mid);
-  const rightFields = fieldOptions.slice(mid);
 
   const formatOptions = [
     { label: "CSV (Comma Separated)", value: "csv" },
@@ -226,7 +207,7 @@ export default function ExportPage() {
               onAction: handleDownload,
               loading: isDownloading,
               icon: ExportIcon,
-              disabled: selectedFields.length === 0,
+              disabled: selectedProductIds.length === 0,
             }
           : {
               content: isCreating ? "Creating Snapshot..." : "Create Snapshot",
@@ -235,7 +216,6 @@ export default function ExportPage() {
               icon: ExportIcon,
               disabled:
                 !exportName ||
-                selectedFields.length === 0 ||
                 selectedProductIds.length === 0,
             }
       }
@@ -354,7 +334,7 @@ export default function ExportPage() {
             </Card>
 
             {/* Field Selection and Tips Row */}
-            <Layout>
+            {/* <Layout>
               <Layout.Section>
                 <Box paddingBlockEnd="400">
                   <Card>
@@ -407,7 +387,10 @@ export default function ExportPage() {
               </Layout.Section>
 
               <Layout.Section variant="oneThird">
-                <Card>
+               
+              </Layout.Section>
+            </Layout> */}
+             <Card>
                   <BlockStack gap="300">
                     <Text as="h3" variant="headingMd" fontWeight="semibold">
                       How Snapshots Work
@@ -427,8 +410,6 @@ export default function ExportPage() {
                     </BlockStack>
                   </BlockStack>
                 </Card>
-              </Layout.Section>
-            </Layout>
           </BlockStack>
         </Layout.Section>
       </Layout>

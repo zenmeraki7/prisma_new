@@ -19,8 +19,19 @@ export function compileFastWhere(
   expr: FilterExpr | null | undefined,
   registry: FilterRegistry
 ): ProductWhere {
-  if (!expr) return {};
-  return compileExpr(expr, registry);
+  console.log('🔨 compileFastWhere called with:', {
+    exprIsNull: expr === null,
+    exprIsUndefined: expr === undefined,
+    expr: expr ? JSON.stringify(expr, null, 2) : 'null/undefined'
+  });
+  if (!expr) {
+    console.log('🔨 compileFastWhere returning empty (no expr)');
+    return {};
+  }
+  
+  const result = compileExpr(expr, registry);
+  console.log('🔨 compileFastWhere result:', JSON.stringify(result, null, 2));
+  return result;
 }
 
 /* =======================================================================
@@ -74,7 +85,12 @@ function compileLeaf(
   registry: FilterRegistry
 ): ProductWhere {
   const def = getFilterDef(leaf.filterId);
-
+console.log('🍃 Filter definition found:', {
+    id: def.id,
+    plane: def.plane,
+    hasFastField: !!def.fastField,
+    fastField: def.fastField
+  })
   if (def.plane !== "FAST") {
     throw new Error(
       `FAST compiler: filterId "${def.id}" is plane=${def.plane}, cannot compile into FAST plane.`

@@ -10,7 +10,7 @@ export function astFromJson(raw: unknown): FilterExpr | null {
 
   const node = raw as any;
 
-  // Group node
+  // Group node: has type="group" and children array
   if (node.type === "group") {
     if (!Array.isArray(node.children)) {
       throw new Error("Filter group must have a children array");
@@ -18,7 +18,12 @@ export function astFromJson(raw: unknown): FilterExpr | null {
     return node as FilterExpr;
   }
 
-  // Leaf node
+  // Leaf node: has filterId and op (no type field needed)
+  if (typeof node.filterId === "string" && typeof node.op === "string") {
+    return node as FilterExpr;
+  }
+
+  // Legacy: check if it has type="leaf" (for backwards compatibility)
   if (node.type === "leaf") {
     if (typeof node.filterId !== "string" || typeof node.op !== "string") {
       throw new Error("Filter leaf must have filterId and op");
@@ -26,5 +31,5 @@ export function astFromJson(raw: unknown): FilterExpr | null {
     return node as FilterExpr;
   }
 
-  throw new Error("Unknown FilterExpr node type in JSON");
+  throw new Error(`Unknown FilterExpr node type in JSON: ${JSON.stringify(node)}`);
 }

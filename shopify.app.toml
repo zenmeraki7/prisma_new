@@ -1,17 +1,13 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "6c1a39944a4ab6bdd6e4428ccceb028b"
-name = "new"
-application_url = "https://component-html-kodak-tan.trycloudflare.com"
+client_id = "20f31d269398d5f23df95d0450e772e9"
+name = "test-app"
+application_url = "https://foam-cgi-alt-directed.trycloudflare.com"
 embedded = true
-handle = "new-270"
+handle = "test-app-11537"
 
 [webhooks]
 api_version = "2025-04"
-
-  [[webhooks.subscriptions]]
-  topics = [ "products/create", "bulk_operations/finish" ]
-  uri = "https://a50e-2409-4073-307-d512-1554-bf40-8d5f-a82.ngrok-free.app/api/webhooks"
 
   [[webhooks.subscriptions]]
   uri = "https://contributing-cole-senate-dried.trycloudflare.com/gdpr/customer_data_erasure"
@@ -25,24 +21,27 @@ api_version = "2025-04"
   uri = "https://contributing-cole-senate-dried.trycloudflare.com/gdpr/shop_data_erasure"
   compliance_topics = [ "shop/redact" ]
 
+  [[webhooks.subscriptions]]
+  topics = [ "bulk_operations/finish", "products/create" ]
+  uri = "https://a50e-2409-4073-307-d512-1554-bf40-8d5f-a82.ngrok-free.app/api/webhooks"
+
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_inventory,read_locations,read_products,write_inventory,write_products"
+scopes = "read_locations,read_products,write_products"
+optional_scopes = [ ]
+use_legacy_install_flow = false
 
 [auth]
 redirect_urls = [
-  "https://component-html-kodak-tan.trycloudflare.com/auth/callback",
-  "https://component-html-kodak-tan.trycloudflare.com/auth/shopify/callback",
-  "https://component-html-kodak-tan.trycloudflare.com/api/auth/callback"
+  "https://foam-cgi-alt-directed.trycloudflare.com/auth/callback",
+  "https://foam-cgi-alt-directed.trycloudflare.com/auth/shopify/callback",
+  "https://foam-cgi-alt-directed.trycloudflare.com/api/auth/callback"
 ]
 
 [app_proxy]
 url = "https://automatic-learners-excluded-decorative.trycloudflare.com/storefront/subscription"
 subpath = "proxy"
 prefix = "apps"
-
-[pos]
-embedded = false
 
 [build]
 automatically_update_urls_on_dev = true

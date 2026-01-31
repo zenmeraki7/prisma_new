@@ -1,3 +1,4 @@
+// web/frontend/queries/bootstrapProducts.ts
 import type { AppBridgeState } from "@shopify/app-bridge-react";
 import { graphqlRequest } from "../../lib/graphqlClient";
 import type { ProductLiteDto } from "../types/product";
