@@ -21,6 +21,36 @@ const STATIC_PATH =
     : `${process.cwd()}/frontend/`;
 
 // ──────────────────────────────────────────────
+// Helper: safely serialize Prisma models (BigInt → string)
+// ──────────────────────────────────────────────
+function serializePrisma(value) {
+  if (value === null || value === undefined) return value;
+
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((v) => serializePrisma(v));
+  }
+
+  if (value instanceof Date) {
+    // Let Express / JSON.stringify handle Date normally by returning it
+    return value;
+  }
+
+  if (typeof value === "object") {
+    const out = {};
+    for (const [key, val] of Object.entries(value)) {
+      out[key] = serializePrisma(val);
+    }
+    return out;
+  }
+
+  return value;
+}
+
+// ──────────────────────────────────────────────
 // Express app
 // ──────────────────────────────────────────────
 const app = express();
@@ -677,7 +707,7 @@ app.post("/api/graphql", async (req, res) => {
 
       return res.json({
         data: {
-          triggerSnapshotRun: run,
+          triggerSnapshotRun: serializePrisma(run),
         },
       });
     }
@@ -741,7 +771,7 @@ app.post("/api/graphql", async (req, res) => {
             errorMessage: latestRun.errorMessage,
             filterSummary: latestRun.filterSummary,
             planHash: latestRun.planHash,
-            snapshotRunId: latestRun.id,
+            snapshotRunId: String(latestRun.id), // BigInt-safe
           },
         },
       });
@@ -813,7 +843,7 @@ app.post("/api/graphql", async (req, res) => {
             productsBySnapshot: {
               items: [],
               nextCursor: null,
-              snapshotRunId: latestRun.id,
+              snapshotRunId: String(latestRun.id),
             },
           },
         });
@@ -849,7 +879,7 @@ app.post("/api/graphql", async (req, res) => {
           productsBySnapshot: {
             items,
             nextCursor,
-            snapshotRunId: latestRun.id,
+            snapshotRunId: String(latestRun.id),
           },
         },
       });
@@ -888,7 +918,9 @@ app.post("/api/graphql", async (req, res) => {
         skip: offset,
       });
 
-      const edges = runs.map((run, idx) => ({
+      const safeRuns = runs.map((run) => serializePrisma(run));
+
+      const edges = safeRuns.map((run, idx) => ({
         cursor: String(offset + idx + 1),
         node: run,
       }));
@@ -909,8 +941,7 @@ app.post("/api/graphql", async (req, res) => {
       });
     }
 
-    // ───────────────── snapshotRunEvents (connection style for modal) ─────────────────
-       // ───────────────── snapshotRunEvents (supports both simple + connection shapes) ─────────────────
+    // ───────────────── snapshotRunEvents (supports both simple + connection shapes) ─────────────────
     if (query.includes("snapshotRunEvents")) {
       const runId = variables?.runId;
       if (!runId) {
@@ -954,7 +985,9 @@ app.post("/api/graphql", async (req, res) => {
         skip: offset,
       });
 
-      const edges = events.map((ev, idx) => ({
+      const safeEvents = events.map((ev) => serializePrisma(ev));
+
+      const edges = safeEvents.map((ev, idx) => ({
         cursor: String(offset + idx + 1),
         node: ev,
       }));
@@ -966,7 +999,7 @@ app.post("/api/graphql", async (req, res) => {
         data: {
           snapshotRunEvents: {
             // simple shape
-            events,
+            events: safeEvents,
             nextCursor: endCursor,
             // connection shape
             edges,
@@ -978,7 +1011,6 @@ app.post("/api/graphql", async (req, res) => {
         },
       });
     }
-
 
     // ───────────────── unknown operation ─────────────────
     return res

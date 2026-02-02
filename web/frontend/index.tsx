@@ -1,7 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { AppProvider as PolarisAppProvider } from "@shopify/polaris";
-import { AppBridgeProvider } from "@shopify/app-bridge-react";
+import { Provider as AppBridgeProvider } from "@shopify/app-bridge-react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import enTranslations from "@shopify/polaris/locales/en.json";
 

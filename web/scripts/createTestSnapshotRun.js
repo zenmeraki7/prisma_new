@@ -3,8 +3,7 @@ import "dotenv/config";
 import { prisma } from "../db/prisma.js";
 
 async function main() {
-  // IMPORTANT: set this to the store where you're opening the embedded app
-  // e.g. "demo-zen-store.myshopify.com"
+  // Must match shopDomain in Prisma Studio exactly:
   const TARGET_SHOP_DOMAIN = "demo-zen-store.myshopify.com";
 
   const shop = await prisma.shop.findUnique({
@@ -21,7 +20,6 @@ async function main() {
 
   console.log("Using shop", shop.id, shop.shopDomain);
 
-  // Create a dummy snapshot run
   const run = await prisma.snapshotRun.create({
     data: {
       shopId: shop.id,
@@ -36,7 +34,6 @@ async function main() {
 
   console.log("✅ Created SnapshotRun:", run.id);
 
-  // Add a couple of events
   await prisma.snapshotRunEvent.createMany({
     data: [
       {

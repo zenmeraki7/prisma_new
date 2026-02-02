@@ -29,13 +29,13 @@ model ProductLite {
   category    String?    // Your own classification
   description String?    // Product description
 
-  createdAtShopify   DateTime @map("created_at_shopify")
-  updatedAtShopify   DateTime @map("updated_at_shopify")
+  createdAtShopify   DateTime  @map("created_at_shopify")
+  updatedAtShopify   DateTime  @map("updated_at_shopify")
   publishedAtShopify DateTime? @map("published_at_shopify")
 
   // Visibility / SEO
-  isSearchable       Boolean @default(true) @map("is_searchable")
-  visibleOnlineStore Boolean @default(true) @map("visible_online_store")
+  isSearchable       Boolean @default(true)  @map("is_searchable")
+  visibleOnlineStore Boolean @default(true)  @map("visible_online_store")
   visiblePos         Boolean @default(false) @map("visible_pos")
   templateSuffix     String? @map("template_suffix")
 
@@ -48,11 +48,11 @@ model ProductLite {
   tags String[] @default([])
 
   // Denormalized FAST plane fields
-  hasImages      Boolean @default(false)
+  hasImages      Boolean  @default(false)
   minPrice       Decimal? @map("min_price")
   maxPrice       Decimal? @map("max_price")
-  totalInventory Int? @map("total_inventory")
-  variantCount   Int? @map("variant_count")
+  totalInventory Int?     @map("total_inventory")
+  variantCount   Int?     @map("variant_count")
 
   // Relations
   variantRollup  VariantRollup?
@@ -92,19 +92,19 @@ model VariantRollup {
   maxCost Decimal? @map("max_cost")
 
   // Inventory
-  totalInventory Int @map("total_inventory")
+  totalInventory         Int  @map("total_inventory")
   minInventoryPerVariant Int? @map("min_inventory_per_variant")
   maxInventoryPerVariant Int? @map("max_inventory_per_variant")
-  variantCount Int @map("variant_count")
+  variantCount           Int  @map("variant_count")
 
   // Boolean rollups
-  anyTaxable Boolean @default(false) @map("any_taxable")
-  allTaxable Boolean @default(false) @map("all_taxable")
-  anyTrackQuantity Boolean @default(false) @map("any_track_quantity")
-  allTrackQuantity Boolean @default(false) @map("all_track_quantity")
+  anyTaxable        Boolean @default(false) @map("any_taxable")
+  allTaxable        Boolean @default(false) @map("all_taxable")
+  anyTrackQuantity  Boolean @default(false) @map("any_track_quantity")
+  allTrackQuantity  Boolean @default(false) @map("all_track_quantity")
   anyContinueSelling Boolean @default(false) @map("any_continue_selling")
   allContinueSelling Boolean @default(false) @map("all_continue_selling")
-  hasPhysical Boolean @default(false) @map("has_physical")
+  hasPhysical        Boolean @default(false) @map("has_physical")
 
   // Margins
   minMargin Decimal? @map("min_margin")
@@ -142,10 +142,10 @@ model ProductTag {
 
 /// Product ↔ Collection mapping
 model ProductCollection {
-  id           BigInt @id @default(autoincrement())
-  shopId       String
-  productId    String
-  collectionId String
+  id              BigInt @id @default(autoincrement())
+  shopId          String
+  productId       String
+  collectionId    String
   collectionHandle String? @map("collection_handle")
   collectionTitle  String? @map("collection_title")
 
@@ -162,17 +162,17 @@ model VariantLite {
   variantId String
   productId String
 
-  sku     String? 
-  barcode String? 
+  sku     String?
+  barcode String?
 
   price          Decimal
-  compareAtPrice Decimal? 
+  compareAtPrice Decimal?
   cost           Decimal?
 
-  taxable        Boolean? 
+  taxable        Boolean?
   trackQuantity  Boolean?
   inventoryQty   Int
-  inventoryPolicy String? 
+  inventoryPolicy String?
 
   weightGrams Int?
   weightUnit  String?
@@ -182,9 +182,9 @@ model VariantLite {
   option3Value String?
 
   // NEW fields
-  title String?           // Variant title
-  countryOfOrigin String? // Country of origin
-  hsTariffCode String?    // HS Tariff code
+  title          String? // Variant title
+  countryOfOrigin String?
+  hsTariffCode    String?
 
   product ProductLite @relation(fields: [shopId, productId], references: [shopId, productId])
 
@@ -197,9 +197,9 @@ model VariantLite {
 
 /// Normalized option values per product
 model ProductOptionValue {
-  id        BigInt @id @default(autoincrement())
-  shopId    String
-  productId String
+  id          BigInt @id @default(autoincrement())
+  shopId      String
+  productId   String
   optionIndex Int
   value       String
 
@@ -211,10 +211,10 @@ model ProductOptionValue {
 
 /// Per-product, per-location availability
 model ProductInventoryLocation {
-  id        BigInt @id @default(autoincrement())
-  shopId    String
-  productId String
-  locationId String
+  id           BigInt @id @default(autoincrement())
+  shopId       String
+  productId    String
+  locationId   String
   hasInventory Boolean @default(false)
   totalQuantity Int?
 
@@ -222,4 +222,60 @@ model ProductInventoryLocation {
 
   @@unique([shopId, productId, locationId])
   @@index([shopId, locationId, productId])
+}
+
+/// ----------------------------------------------------
+/// Core Shop & Snapshot Plane
+/// ----------------------------------------------------
+
+model Shop {
+  /// Internal ID for this shop (you can use Shopify GID or your own UUID)
+  id         String   @id
+  /// Shopify domain like "demo-zen-store.myshopify.com"
+  shopDomain String   @unique
+  /// Optional access token (for API calls)
+  accessToken String?
+
+  // Relations
+  snapshotRuns SnapshotRun[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// One snapshot run per “bulk filter execution”
+model SnapshotRun {
+  id           BigInt   @id @default(autoincrement())
+  shopId       String
+  planHash     String
+  filterSummary String
+  state        String   // PENDING | RUNNING | SUCCEEDED | FAILED | CANCELLED
+  progress     Int      @default(0)
+  total        Int      @default(0)
+  errorMessage String?
+
+  // Relations
+  shop   Shop               @relation(fields: [shopId], references: [id])
+  events SnapshotRunEvent[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([shopId, state, id])
+}
+
+/// Log lines / milestones for a snapshot run
+model SnapshotRunEvent {
+  id            BigInt  @id @default(autoincrement())
+  shopId        String
+  snapshotRunId BigInt
+  kind          String   // INFO | WARN | ERROR
+  message       String
+
+  // Relations
+  run SnapshotRun @relation(fields: [snapshotRunId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([shopId, snapshotRunId, id])
 }
