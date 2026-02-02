@@ -68,7 +68,7 @@ function buildProductWhereFromFilter(shopId, filterExpr) {
           mode: "insensitive",
         };
       } else if (filterId === "product.productType" && op === "contains") {
-        where.productType = {
+        where.product_Type = {
           contains: String(value),
           mode: "insensitive",
         };
@@ -156,12 +156,12 @@ async function buildSnapshotForPlanHash({ shop, planHash, filterExpr, filterSumm
     while (true) {
       const batch = await prisma.productLite.findMany({
         where,
-        orderBy: { updatedAtShopify: "desc" },
+        orderBy: { updated_at_shopify: "desc" },
         skip: offset,
         take: pageSize,
         select: {
           id: true,
-          updatedAtShopify: true,
+          updated_at_shopify: true,
         },
       });
 
@@ -172,7 +172,7 @@ async function buildSnapshotForPlanHash({ shop, planHash, filterExpr, filterSumm
           shopId: shop.id,
           snapshotRunId: runId,
           productId: p.id,
-          sortKey: p.updatedAtShopify ?? new Date(),
+          sortKey: p.updated_at_shopify ?? new Date(),
         })),
         skipDuplicates: true,
       });
@@ -328,7 +328,7 @@ app.post("/api/graphql", async (req, res) => {
           productType: p.productType,
           tags: p.tags || [],
           hasImages: (p.images?.edges?.length || 0) > 0,
-          updatedAtShopify: p.updatedAt,
+          updated_at_shopify: p.updatedAt,
         };
       });
       const nextCursor =
@@ -447,7 +447,7 @@ app.post("/api/graphql", async (req, res) => {
                 vendor: p.vendor || null,
                 productType: p.productType || null,
                 hasImages: (p.images?.edges?.length || 0) > 0,
-                updatedAtShopify: p.updatedAt
+                updated_at_shopify: p.updatedAt
                   ? new Date(p.updatedAt)
                   : null,
               },
@@ -460,7 +460,7 @@ app.post("/api/graphql", async (req, res) => {
                 vendor: p.vendor || null,
                 productType: p.productType || null,
                 hasImages: (p.images?.edges?.length || 0) > 0,
-                updatedAtShopify: p.updatedAt
+                updated_at_shopify: p.updatedAt
                   ? new Date(p.updatedAt)
                   : null,
               },
@@ -596,7 +596,7 @@ app.post("/api/graphql", async (req, res) => {
 
         const items = await prisma.productLite.findMany({
           where,
-          orderBy: { updatedAtShopify: "desc" },
+          orderBy: { updated_at_shopify: "desc" },
           take: first,
           skip: after ? parseInt(after, 10) : 0,
           include: {
@@ -614,10 +614,10 @@ app.post("/api/graphql", async (req, res) => {
           handle: item.handle,
           status: item.status,
           vendor: item.vendor,
-          productType: item.productType,
+          productType: item.product_Type,
           tags: item.tags.map((t) => t.tag),
           hasImages: item.hasImages,
-          updatedAtShopify: item.updatedAtShopify,
+          updated_at_shopify: item.updated_at_shopify,
         }));
 
         const nextCursor =
@@ -836,10 +836,10 @@ app.post("/api/graphql", async (req, res) => {
         handle: item.handle,
         status: item.status,
         vendor: item.vendor,
-        productType: item.productType,
+        productType: item.product_Type,
         tags: item.tags.map((t) => t.tag),
         hasImages: item.hasImages,
-        updatedAtShopify: item.updatedAtShopify,
+        updated_at_shopify: item.updated_at_shopify,
       }));
 
       const nextCursor =
