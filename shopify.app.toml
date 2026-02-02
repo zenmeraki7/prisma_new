@@ -2,7 +2,7 @@
 
 client_id = "20f31d269398d5f23df95d0450e772e9"
 name = "test-app"
-application_url = "https://foam-cgi-alt-directed.trycloudflare.com"
+application_url = "https://conclude-library-northeast-happen.trycloudflare.com"
 embedded = true
 handle = "test-app-11537"
 
@@ -33,9 +33,9 @@ use_legacy_install_flow = false
 
 [auth]
 redirect_urls = [
-  "https://foam-cgi-alt-directed.trycloudflare.com/auth/callback",
-  "https://foam-cgi-alt-directed.trycloudflare.com/auth/shopify/callback",
-  "https://foam-cgi-alt-directed.trycloudflare.com/api/auth/callback"
+  "https://conclude-library-northeast-happen.trycloudflare.com/auth/callback",
+  "https://conclude-library-northeast-happen.trycloudflare.com/auth/shopify/callback",
+  "https://conclude-library-northeast-happen.trycloudflare.com/api/auth/callback"
 ]
 
 [app_proxy]
