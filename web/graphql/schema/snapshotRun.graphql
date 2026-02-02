@@ -1,0 +1,46 @@
+# FILE: web/graphql/schema/snapshotRuns.graphql
+
+enum SnapshotRunStatus {
+  QUEUED
+  RUNNING
+  INGESTING
+  COMPLETED
+  FAILED
+}
+
+type SnapshotRun {
+  id: ID!
+  shopId: String!
+  status: SnapshotRunStatus!
+  createdAt: String!
+  updatedAt: String!
+  bulkOperationId: String
+  bulkOperationStatus: String
+  bulkOperationUrl: String
+  errorMessage: String
+  candidateCount: Int
+  filterJson: JSON
+}
+
+type SnapshotRunEdge {
+  cursor: String!
+  node: SnapshotRun!
+}
+
+type SnapshotRunConnection {
+  edges: [SnapshotRunEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+input SnapshotRunsFilterInput {
+  status: SnapshotRunStatus
+}
+
+type Query {
+  snapshotRuns(
+    first: Int = 20
+    after: String
+    filter: SnapshotRunsFilterInput
+  ): SnapshotRunConnection!
+}

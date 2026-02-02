@@ -39,6 +39,9 @@ export default function App() {
                <a href="/Export">
                 {t("NavigationMenu.Export")}
               </a>
+                <a href="/snapshotRunsPage">
+                {t("NavigationMenu.SnapshotRunsPage")}
+              </a>
           </NavMenu>
           <Routes pages={pages} />
         </QueryProvider>

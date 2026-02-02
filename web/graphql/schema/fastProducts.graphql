@@ -1,0 +1,118 @@
+# FILE: web/graphql/schema/fastProducts.graphql
+
+scalar JSON
+
+"""
+A single product row from the FAST plane (ProductLite).
+"""
+type FastProduct {
+  id: ID!
+  productId: String!
+  title: String!
+  vendor: String
+  productType: String
+  category: String
+  handle: String
+  templateSuffix: String
+  status: ProductStatus!
+  onlineStoreVisible: Boolean!
+  posVisible: Boolean!
+  createdAtShopify: String!
+  updatedAtShopify: String!
+  publishedAtShopify: String
+  totalInventory: Int!
+  variantCount: Int!
+  tags: [String!]!
+  collections: [String!]!
+}
+
+"""
+Standard relay-style edge.
+"""
+type FastProductEdge {
+  cursor: String!
+  node: FastProduct!
+}
+
+"""
+Pagination info.
+"""
+type PageInfo {
+  hasNextPage: Boolean!
+  hasPreviousPage: Boolean!
+  startCursor: String
+  endCursor: String
+}
+
+"""
+Connection wrapper for FastProduct.
+"""
+type FastProductConnection {
+  edges: [FastProductEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+"""
+Supported sort fields on the FAST plane.
+"""
+enum FastProductSortField {
+  TITLE
+  CREATED_AT
+  UPDATED_AT
+  PUBLISHED_AT
+  TOTAL_INVENTORY
+  VARIANT_COUNT
+}
+
+"""
+Sort direction.
+"""
+enum SortDirection {
+  ASC
+  DESC
+}
+
+"""
+Sort input for Fast Products.
+"""
+input FastProductSortInput {
+  field: FastProductSortField!
+  direction: SortDirection! = ASC
+}
+
+"""
+A single filter predicate, aligned with your registry keys & operators.
+- key: maps to registry FilterKey (e.g. "product.title", "variant.sku")
+- operator: maps to registry FilterOperator (e.g. "CONTAINS", "EQ")
+- value: the raw value; JSON lets you support strings, numbers, arrays, etc.
+"""
+input FastProductFilterPredicateInput {
+  key: String!
+  operator: String!
+  value: JSON
+}
+
+"""
+Top-level filter input for fastProducts.
+"""
+input FastProductFilterInput {
+  predicates: [FastProductFilterPredicateInput!]!
+}
+
+"""
+Main query: Shopify Ablestar-killer FAST product listing.
+
+- first: page size (like Relay)
+- after: cursor for pagination
+- filter: registry-driven filters
+- sort: sort configuration
+"""
+type Query {
+  fastProducts(
+    first: Int = 50
+    after: String
+    filter: FastProductFilterInput
+    sort: FastProductSortInput
+  ): FastProductConnection!
+}
