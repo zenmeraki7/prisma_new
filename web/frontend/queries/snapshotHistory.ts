@@ -2,17 +2,21 @@
 import type { AppBridgeState } from "@shopify/app-bridge-react";
 import { graphqlRequest } from "../../lib/graphqlClient";
 
-export type SnapshotState =
-  | "PENDING"
+/**
+ * Snapshot run lifecycle as exposed via GraphQL.
+ * Keep this aligned with backend SnapshotRunStatus enum.
+ */
+export type SnapshotRunStatus =
+  | "QUEUED"
   | "RUNNING"
-  | "SUCCEEDED"
-  | "FAILED"
-  | "EXPIRED";
+  | "INGESTING"
+  | "COMPLETED"
+  | "FAILED";
 
 export type SnapshotRunDto = {
   id: string;
   planHash: string;
-  state: SnapshotState;
+  status: SnapshotRunStatus;
   progress: number;
   total: number;
   errorMessage?: string | null;
@@ -63,7 +67,7 @@ const SNAPSHOT_RUNS_QUERY = `
         node {
           id
           planHash
-          state
+          status
           progress
           total
           errorMessage

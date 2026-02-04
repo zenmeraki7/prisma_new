@@ -13,9 +13,14 @@ import {
   Select,
   BlockStack,
 } from "@shopify/polaris";
-import { useSnapshotRuns, type SnapshotRunStatus } from "../queries/snapshotRuns";
+import {
+  useSnapshotRuns,
+  type SnapshotRunStatus,
+} from "../queries/snapshotRuns";
 
-function statusTone(status: SnapshotRunStatus): "attention" | "success" | "critical" | "subdued" {
+function statusTone(
+  status: SnapshotRunStatus,
+): "attention" | "success" | "critical" | "subdued" {
   switch (status) {
     case "QUEUED":
     case "RUNNING":
@@ -50,13 +55,10 @@ export default function SnapshotRunsPage() {
 
   const runs = data?.edges ?? [];
 
-  const handleStatusChange = useCallback(
-    (val: string) => {
-      setStatusFilter(val as SnapshotRunStatus | "ALL");
-      setAfter(null); // reset pagination when filter changes
-    },
-    [],
-  );
+  const handleStatusChange = useCallback((val: string) => {
+    setStatusFilter(val as SnapshotRunStatus | "ALL");
+    setAfter(null); // reset pagination when filter changes
+  }, []);
 
   const handleNext = useCallback(() => {
     if (data?.pageInfo.hasNextPage && data.pageInfo.endCursor) {
@@ -108,11 +110,11 @@ export default function SnapshotRunsPage() {
                   value={statusFilter}
                   onChange={handleStatusChange}
                 />
-                {data && (
+                {data ? (
                   <Text as="span" tone="subdued">
                     Total: {data.totalCount}
                   </Text>
-                )}
+                ) : null}
               </InlineStack>
             </InlineStack>
 
@@ -141,15 +143,11 @@ export default function SnapshotRunsPage() {
                   </IndexTable.Cell>
 
                   <IndexTable.Cell>
-                    <Text as="span">
-                      {node.candidateCount ?? "-"}
-                    </Text>
+                    <Text as="span">{node.candidateCount ?? "-"}</Text>
                   </IndexTable.Cell>
 
                   <IndexTable.Cell>
-                    <Text as="span">
-                      {node.bulkOperationStatus ?? "-"}
-                    </Text>
+                    <Text as="span">{node.bulkOperationStatus ?? "-"}</Text>
                   </IndexTable.Cell>
 
                   <IndexTable.Cell>
@@ -178,14 +176,15 @@ export default function SnapshotRunsPage() {
                 <IndexTable.Row id="empty" position={0}>
                   <IndexTable.Cell colSpan={6}>
                     <Text as="p" tone="subdued">
-                      No snapshot runs yet. Run an SEO snapshot from the Products page.
+                      No snapshot runs yet. Run an SEO snapshot from the
+                      Products page.
                     </Text>
                   </IndexTable.Cell>
                 </IndexTable.Row>
               )}
             </IndexTable>
 
-            {data && (
+            {data ? (
               <InlineStack align="center" blockAlign="center">
                 <Pagination
                   hasPrevious={Boolean(after)}
@@ -194,7 +193,7 @@ export default function SnapshotRunsPage() {
                   onNext={handleNext}
                 />
               </InlineStack>
-            )}
+            ) : null}
           </BlockStack>
         </Card>
       </BlockStack>

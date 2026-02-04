@@ -61,19 +61,20 @@ function useSnapshotRunEvents(
   });
 }
 
-function stateTone(state: SnapshotRunDto["state"]): "success" | "critical" | "attention" | "subdued" {
-  switch (state) {
-    case "SUCCEEDED":
-      return "success";
+function statusTone(
+  status: SnapshotRunDto["status"]
+): "success" | "critical" | "attention" | "subdued" {
+  switch (status) {
+    case "COMPLETED":
+      return "success";      // green
     case "FAILED":
-      return "critical";
+      return "critical";     // red
     case "RUNNING":
-      return "attention";
-    case "PENDING":
-      return "subdued";
-    case "EXPIRED":
+    case "INGESTING":
+    case "QUEUED":
+      return "attention";    // yellow
     default:
-      return "subdued";
+      return "subdued";      // grey fallback
   }
 }
 
@@ -146,7 +147,7 @@ export default function SnapshotJobsPage() {
                   onSelectionChange={() => {}}
                   headings={[
                     { title: "Created" },
-                    { title: "State" },
+                    { title: "Status" },
                     { title: "Progress" },
                     { title: "Filter" },
                     { title: "Plan hash" },
@@ -165,32 +166,38 @@ export default function SnapshotJobsPage() {
                           {new Date(run.createdAt).toLocaleString()}
                         </Text>
                       </IndexTable.Cell>
+
                       <IndexTable.Cell>
-                        <Badge tone={stateTone(run.state)}>
-                          {run.state}
+                        <Badge tone={statusTone(run.status)}>
+                          {run.status}
                         </Badge>
                       </IndexTable.Cell>
+
                       <IndexTable.Cell>
                         <Text as="span" variant="bodySm">
                           {run.total > 0
                             ? `${run.progress}/${run.total}`
-                            : run.state === "SUCCEEDED"
+                            : run.status === "COMPLETED"
                             ? "Completed"
-                            : run.state === "RUNNING"
+                            : run.status === "RUNNING" ||
+                              run.status === "INGESTING"
                             ? "In progress"
                             : "—"}
                         </Text>
                       </IndexTable.Cell>
+
                       <IndexTable.Cell>
                         <Text as="span" variant="bodySm" tone="subdued">
                           {run.filterSummary || "—"}
                         </Text>
                       </IndexTable.Cell>
+
                       <IndexTable.Cell>
                         <Text as="span" variant="bodySm" tone="subdued">
                           {run.planHash.slice(0, 10)}…
                         </Text>
                       </IndexTable.Cell>
+
                       <IndexTable.Cell>
                         {run.errorMessage ? (
                           <Text as="span" tone="critical" variant="bodySm">
@@ -239,7 +246,7 @@ export default function SnapshotJobsPage() {
         onClose={closeModal}
         title={
           selectedRun
-            ? `Run ${selectedRun.id.slice(0, 8)}… (${selectedRun.state})`
+            ? `Run ${selectedRun.id.slice(0, 8)}… (${selectedRun.status})`
             : "Run details"
         }
         large
@@ -250,11 +257,13 @@ export default function SnapshotJobsPage() {
               <Text as="p" variant="bodySm" tone="subdued">
                 Plan hash: <code>{selectedRun.planHash}</code>
               </Text>
+
               {selectedRun.filterSummary && (
                 <Text as="p" variant="bodySm">
                   Filter: {selectedRun.filterSummary}
                 </Text>
               )}
+
               {selectedRun.errorMessage && (
                 <Banner tone="critical">
                   <p>{selectedRun.errorMessage}</p>

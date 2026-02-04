@@ -1,4 +1,8 @@
-import { PrismaClient } from "@prisma/client";
+// FILE: web/db/prisma.js
+import {
+  PrismaClient,
+  SnapshotRunStatus, // export enums you need
+} from "@prisma/client";
 
 /** @type {PrismaClient} */
 let prisma;
@@ -10,4 +14,4 @@ if (global.__prisma) {
   if (process.env.NODE_ENV !== "production") global.__prisma = prisma;
 }
 
-export { prisma };
+export { prisma, SnapshotRunStatus };

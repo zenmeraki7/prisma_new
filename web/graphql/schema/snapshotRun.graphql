@@ -1,4 +1,4 @@
-# FILE: web/graphql/schema/snapshotRuns.graphql
+# FILE: web/graphql/schema/snapshotRuns.graphql (or merged into your main schema)
 
 enum SnapshotRunStatus {
   QUEUED
@@ -12,14 +12,13 @@ type SnapshotRun {
   id: ID!
   shopId: String!
   status: SnapshotRunStatus!
+  progress: Int!
+  total: Int!
+  filterSummary: String!
+  planHash: String!
+  errorMessage: String
   createdAt: String!
   updatedAt: String!
-  bulkOperationId: String
-  bulkOperationStatus: String
-  bulkOperationUrl: String
-  errorMessage: String
-  candidateCount: Int
-  filterJson: JSON
 }
 
 type SnapshotRunEdge {
@@ -27,20 +26,19 @@ type SnapshotRunEdge {
   node: SnapshotRun!
 }
 
-type SnapshotRunConnection {
+type SnapshotRunsPageInfo {
+  hasNextPage: Boolean!
+  hasPreviousPage: Boolean!
+  startCursor: String
+  endCursor: String
+}
+
+type SnapshotRunsPage {
   edges: [SnapshotRunEdge!]!
-  pageInfo: PageInfo!
+  pageInfo: SnapshotRunsPageInfo!
   totalCount: Int!
 }
 
-input SnapshotRunsFilterInput {
-  status: SnapshotRunStatus
-}
-
-type Query {
-  snapshotRuns(
-    first: Int = 20
-    after: String
-    filter: SnapshotRunsFilterInput
-  ): SnapshotRunConnection!
+extend type Query {
+  snapshotRuns(first: Int, after: String): SnapshotRunsPage!
 }

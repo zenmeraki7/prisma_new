@@ -1,6 +1,5 @@
 // FILE: web/graphql/resolvers/snapshotRuns.ts
-
-import type { PrismaClient, SnapshotRunStatus as PrismaSnapshotRunStatus } from "@prisma/client";
+import type { PrismaClient } from "@prisma/client";
 
 interface GraphQLContext {
   prisma: PrismaClient;
@@ -10,17 +9,15 @@ interface GraphQLContext {
 interface SnapshotRunsArgs {
   first?: number | null;
   after?: string | null;
-  filter?: {
-    status?: "QUEUED" | "RUNNING" | "INGESTING" | "COMPLETED" | "FAILED" | null;
-  } | null;
 }
 
-function encodeCursor(id: string): string {
-  return Buffer.from(id, "utf8").toString("base64");
+function encodeCursor(id: bigint): string {
+  return Buffer.from(id.toString(), "utf8").toString("base64");
 }
 
-function decodeCursor(cursor: string): string {
-  return Buffer.from(cursor, "base64").toString("utf8");
+function decodeCursor(cursor: string): bigint {
+  const decoded = Buffer.from(cursor, "base64").toString("utf8");
+  return BigInt(decoded);
 }
 
 export const snapshotRunsResolvers = {
@@ -28,65 +25,60 @@ export const snapshotRunsResolvers = {
     snapshotRuns: async (
       _parent: unknown,
       args: SnapshotRunsArgs,
-      ctx: GraphQLContext,
+      ctx: GraphQLContext
     ) => {
       const { prisma, shopId } = ctx;
-      const first = Math.min(args.first ?? 20, 100);
+      const first = args.first ?? 25;
 
-      const where: Parameters<PrismaClient["snapshotRun"]["findMany"]>[0]["where"] = {
-        shopId,
-      };
+      const cursorId =
+        args.after != null && args.after !== ""
+          ? decodeCursor(args.after)
+          : null;
 
-      if (args.filter?.status) {
-        where.status = args.filter.status as PrismaSnapshotRunStatus;
-      }
+      const where = { shopId };
 
-      const findManyArgs: Parameters<PrismaClient["snapshotRun"]["findMany"]>[0] =
-        {
+      const [rows, totalCount] = await Promise.all([
+        prisma.snapshotRun.findMany({
           where,
+          orderBy: { createdAt: "desc" },
           take: first + 1,
-          orderBy: {
-            createdAt: "desc",
-          },
-        };
+          ...(cursorId && {
+            cursor: { id: cursorId },
+            skip: 1,
+          }),
+        }),
+        prisma.snapshotRun.count({ where }),
+      ]);
 
-      if (args.after) {
-        const decodedId = decodeCursor(args.after);
-        findManyArgs.cursor = { id: decodedId };
-        findManyArgs.skip = 1;
-      }
-
-      const rows = await prisma.snapshotRun.findMany(findManyArgs);
       const hasNextPage = rows.length > first;
       const pageRows = hasNextPage ? rows.slice(0, first) : rows;
 
-      const totalCount = await prisma.snapshotRun.count({ where });
-
       const edges = pageRows.map((run) => ({
-        cursor: encodeCursor(run.id),
+        cursor: encodeCursor(run.id as bigint),
         node: {
-          id: run.id,
+          id: (run.id as bigint).toString(),
           shopId: run.shopId,
-          status: run.status,
+          status: run.status, // ✅ Prisma field is `status`
+          progress: run.progress,
+          total: run.total,
+          filterSummary: run.filterSummary,
+          planHash: run.planHash,
+          errorMessage: run.errorMessage,
           createdAt: run.createdAt.toISOString(),
           updatedAt: run.updatedAt.toISOString(),
-          bulkOperationId: run.bulkOperationId,
-          bulkOperationStatus: run.bulkOperationStatus,
-          bulkOperationUrl: run.bulkOperationUrl,
-          errorMessage: run.errorMessage,
-          candidateCount: run.candidateCount,
-          filterJson: run.filterJson,
         },
       }));
 
-      const startCursor = edges.length ? edges[0].cursor : null;
-      const endCursor = edges.length ? edges[edges.length - 1].cursor : null;
+      const startCursor =
+        edges.length > 0 ? edges[0].cursor : null;
+      const endCursor =
+        edges.length > 0 ? edges[edges.length - 1].cursor : null;
 
       return {
         edges,
         pageInfo: {
           hasNextPage,
-          hasPreviousPage: Boolean(args.after),
+          hasPreviousPage: false, // not implemented yet
           startCursor,
           endCursor,
         },

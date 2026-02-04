@@ -16,7 +16,6 @@ import {
   TextField,
   Select,
   Button,
-  
 } from "@shopify/polaris";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import type { AppBridgeState } from "@shopify/app-bridge-react";
@@ -60,6 +59,25 @@ function productStatusTone(
   if (status === "DRAFT") return "attention";
   if (status === "ARCHIVED") return "subdued";
   return "subdued";
+}
+
+// web/frontend/pages/ProductsIndexPage.tsx
+
+function snapshotStatusTone(
+  status: SnapshotRunDto["status"],
+): "success" | "critical" | "attention" | "subdued" {
+  switch (status) {
+    case "COMPLETED":
+      return "success";
+    case "FAILED":
+      return "critical";
+    case "RUNNING":
+    case "INGESTING":
+    case "QUEUED":
+      return "attention";
+    default:
+      return "subdued";
+  }
 }
 
 /* ============================
@@ -386,7 +404,7 @@ function buildFilterExprFromUi(params: {
     children.push(leaf("product.hasImages", "eq", false));
   }
 
-  // 6) Min total inventory  🚨 THIS IS THE MISSING PIECE
+  // 6) Min total inventory
   if (params.minTotalInventory.trim()) {
     const parsed = Number(params.minTotalInventory);
     if (!Number.isNaN(parsed)) {
@@ -394,7 +412,6 @@ function buildFilterExprFromUi(params: {
     }
   }
 
-  // If nothing at all is set, return null (no filter)
   if (children.length === 0) {
     return null;
   }
@@ -687,7 +704,7 @@ function SnapshotJobsTab() {
               headings={[
                 { title: "ID" },
                 { title: "Started At" },
-                { title: "Status" }, // or "State" if you prefer
+                { title: "Status" },
               ]}
               selectedItemsCount={0}
               onSelectionChange={() => {}}
@@ -699,18 +716,8 @@ function SnapshotJobsTab() {
                     {new Date(run.createdAt).toLocaleString()}
                   </IndexTable.Cell>
                   <IndexTable.Cell>
-                    <Badge
-                      tone={
-                        run.state === "SUCCEEDED"
-                          ? "success"
-                          : run.state === "FAILED"
-                          ? "critical"
-                          : run.state === "RUNNING"
-                          ? "attention"
-                          : undefined
-                      }
-                    >
-                      {run.state}
+                    <Badge tone={snapshotStatusTone(run.status)}>
+                      {run.status}
                     </Badge>
                   </IndexTable.Cell>
                 </IndexTable.Row>

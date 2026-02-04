@@ -1,6 +1,5 @@
 // FILE: web/frontend/queries/snapshotRuns.ts
-
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import { graphqlRequest } from "../../utils/graphqlClient";
 
 export type SnapshotRunStatus =
@@ -16,12 +15,18 @@ export interface SnapshotRunNode {
   status: SnapshotRunStatus;
   createdAt: string;
   updatedAt: string;
-  bulkOperationId?: string | null;
+
+  // 🔹 These are the “baki” fields your table expects:
+  candidateCount?: number | null;
   bulkOperationStatus?: string | null;
   bulkOperationUrl?: string | null;
+
+  // Optional extra fields
+  progress?: number | null;
+  total?: number | null;
+  filterSummary?: string | null;
+  planHash?: string | null;
   errorMessage?: string | null;
-  candidateCount?: number | null;
-  filterJson?: any;
 }
 
 export interface SnapshotRunsPage {
@@ -41,20 +46,13 @@ interface UseSnapshotRunsArgs {
   status?: SnapshotRunStatus | "ALL";
 }
 
-const SNAPSHOT_RUNS_QUERY = /* GraphQL */ `
-  query SnapshotRuns($first: Int, $after: String, $status: SnapshotRunStatus) {
-    snapshotRuns(
-      first: $first
-      after: $after
-      filter: { status: $status }
-    ) {
-      totalCount
-      pageInfo {
-        hasNextPage
-        hasPreviousPage
-        startCursor
-        endCursor
-      }
+const SNAPSHOT_RUNS_QUERY = `
+  query SnapshotRuns(
+    $first: Int
+    $after: String
+    $status: SnapshotRunStatus
+  ) {
+    snapshotRuns(first: $first, after: $after, status: $status) {
       edges {
         cursor
         node {
@@ -63,36 +61,44 @@ const SNAPSHOT_RUNS_QUERY = /* GraphQL */ `
           status
           createdAt
           updatedAt
-          bulkOperationId
+
+          candidateCount
           bulkOperationStatus
           bulkOperationUrl
+
+          progress
+          total
+          filterSummary
+          planHash
           errorMessage
-          candidateCount
-          filterJson
         }
       }
+      pageInfo {
+        hasNextPage
+        hasPreviousPage
+        startCursor
+        endCursor
+      }
+      totalCount
     }
   }
 `;
 
-export function useSnapshotRuns(args: UseSnapshotRunsArgs = {}) {
-  const { first = 20, after = null, status = "ALL" } = args;
+export function useSnapshotRuns(
+  args: UseSnapshotRunsArgs = {},
+): UseQueryResult<SnapshotRunsPage> {
+  const { first = 25, after = null, status = "ALL" } = args;
+
+  const gqlStatus = status === "ALL" ? null : status;
 
   return useQuery({
     queryKey: ["snapshotRuns", { first, after, status }],
     queryFn: async () => {
-      const variables: any = { first, after };
-
-      if (status && status !== "ALL") {
-        variables.status = status;
-      }
-
-      const res = await graphqlRequest<{
-        snapshotRuns: SnapshotRunsPage;
-      }>(SNAPSHOT_RUNS_QUERY, variables);
-
-      return res.snapshotRuns;
+      const data = await graphqlRequest<{ snapshotRuns: SnapshotRunsPage }>(
+        SNAPSHOT_RUNS_QUERY,
+        { first, after, status: gqlStatus },
+      );
+      return data.snapshotRuns;
     },
-    keepPreviousData: true,
   });
 }

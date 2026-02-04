@@ -1,9 +1,9 @@
-// web/scripts/createTestSnapshotRun.js
+// FILE: web/scripts/createTestSnapshotRun.js
 import "dotenv/config";
-import { prisma } from "../db/prisma.js";
+import { prisma, SnapshotRunStatus } from "../db/prisma.js";
 
 async function main() {
-  // Must match shopDomain in Prisma Studio exactly:
+  // Must match shopDomain in DB exactly:
   const TARGET_SHOP_DOMAIN = "demo-zen-store.myshopify.com";
 
   const shop = await prisma.shop.findUnique({
@@ -25,14 +25,17 @@ async function main() {
       shopId: shop.id,
       planHash: "test-plan-hash",
       filterSummary: "Dummy: status = ACTIVE",
-      state: "SUCCEEDED",
+
+      // ✅ use enum, not raw string
+      status: SnapshotRunStatus.COMPLETED,
+
       progress: 10,
       total: 10,
       errorMessage: null,
     },
   });
 
-  console.log("✅ Created SnapshotRun:", run.id);
+  console.log("✅ Created SnapshotRun:", run.id.toString());
 
   await prisma.snapshotRunEvent.createMany({
     data: [
