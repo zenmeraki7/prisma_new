@@ -1,4 +1,5 @@
 // FILE: web/frontend/pages/ProductsPage.tsx
+
 import React, { useMemo, useState, useCallback } from "react";
 import {
   Page,
@@ -28,11 +29,25 @@ import {
 } from "@tanstack/react-query";
 
 import type { AppBridgeState } from "@shopify/app-bridge-react";
+
 import {
   bootstrapProductsRequest,
   type ProductLiteDto,
   type BootstrapProductsPageDto,
 } from "../queries/bootstrapProducts";
+
+import {
+  productsByFilterRequest,
+  type ProductsByFilterPageDto,
+} from "../queries/productsByFilter";
+
+import {
+  buildFilterExpr,
+  type UiFilter,
+} from "../../lib/filters/buildFilterExpr";
+
+// NEW: FAST plane sync hook
+import { useFastPlaneSync } from "../queries/syncProductsToDb";
 
 /* ----------------------- */
 /* React Query             */
@@ -50,6 +65,32 @@ function useBootstrapProducts(
       return bootstrapProductsRequest(app, {
         first: 50,
         after: pageParam ?? null,
+      });
+    },
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? null,
+  });
+}
+
+/**
+ * Backend-filtered products fetcher using productsByFilter.
+ * We key the query by a JSON-serialized filterExpr so changes reset pagination.
+ */
+function useProductsByFilter(
+  app: AppBridgeState | undefined,
+  filterExpr: unknown,
+): UseInfiniteQueryResult<ProductsByFilterPageDto, Error> {
+  const filterKey = filterExpr ? JSON.stringify(filterExpr) : "NONE";
+
+  return useInfiniteQuery({
+    queryKey: ["productsByFilter", filterKey],
+    enabled: !!app,
+    initialPageParam: null as string | null,
+    queryFn: async ({ pageParam }) => {
+      if (!app) throw new Error("AppBridge not ready");
+      return productsByFilterRequest(app, {
+        first: 50,
+        after: pageParam ?? null,
+        filter: filterExpr,
       });
     },
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? null,
@@ -549,11 +590,103 @@ export default function ProductsPage() {
   const [appliedSortDirection, setAppliedSortDirection] =
     useState<SortDirection>("asc");
 
-  const query = useBootstrapProducts(app);
-  const loadingInitial = query.isLoading;
-  const loadingMore = query.isFetchingNextPage;
+  /* ----------------------- */
+  /* Backend status & data   */
+  /* ----------------------- */
 
-  const status = query.data?.pages[0]?.status;
+  // 1) Use bootstrapProducts only for FAST sync status (ignore its items)
+  const bootstrapQuery = useBootstrapProducts(app);
+  const status = bootstrapQuery.data?.pages[0]?.status;
+
+  // FAST plane sync hook
+  const fastSync = useFastPlaneSync(app);
+
+  // 2) Build UI filters → FilterExpr for backend productsByFilter
+  const uiFilters: UiFilter[] = useMemo(() => {
+    const filters: UiFilter[] = [];
+
+    // Backend mapping is conservative: only send what buildProductWhereFromFilter supports:
+    // - product.status (eq)
+    // - product.vendor (contains)
+    // - product.productType (contains)
+    // - product.tags (contains)
+    // - product.hasImages (eq)
+    // - product.totalInventory (gte)
+
+    // Status (exact)
+    if (appliedStatusFilter) {
+      filters.push({
+        filterId: "product.status",
+        op: "eq",
+        value: appliedStatusFilter,
+      });
+    }
+
+    // Vendor (contains)
+    const vendorVal = appliedStringFilters.vendor.trim();
+    if (vendorVal && appliedStringOps.vendor === "contains") {
+      filters.push({
+        filterId: "product.vendor",
+        op: "contains",
+        value: vendorVal,
+      });
+    }
+
+    // Product type (contains)
+    const productTypeVal = appliedStringFilters.productType.trim();
+    if (productTypeVal && appliedStringOps.productType === "contains") {
+      filters.push({
+        filterId: "product.productType",
+        op: "contains",
+        value: productTypeVal,
+      });
+    }
+
+    // Tag (contains)
+    const tagVal = appliedStringFilters.tagContains.trim();
+    if (tagVal && appliedStringOps.tagContains === "contains") {
+      filters.push({
+        filterId: "product.tags",
+        op: "contains",
+        value: tagVal,
+      });
+    }
+
+    // Has images (boolean)
+    const hasImages = appliedBooleanFilters.hasImages;
+    if (hasImages) {
+      filters.push({
+        filterId: "product.hasImages",
+        op: "eq",
+        value: hasImages === "true",
+      });
+    }
+
+    // Total inventory (>=)
+    const totalInv = appliedNumericFilters.totalInventory;
+    if (totalInv.value.trim() && totalInv.op === "gte") {
+      filters.push({
+        filterId: "product.totalInventory",
+        op: "gte",
+        value: Number(totalInv.value),
+      });
+    }
+
+    return filters;
+  }, [
+    appliedStatusFilter,
+    appliedStringFilters,
+    appliedStringOps,
+    appliedBooleanFilters,
+    appliedNumericFilters,
+  ]);
+
+  const filterExpr = useMemo(() => buildFilterExpr(uiFilters), [uiFilters]);
+
+  // 3) Backend-filtered product list
+  const productsQuery = useProductsByFilter(app, filterExpr);
+  const loadingInitial = productsQuery.isLoading;
+  const loadingMore = productsQuery.isFetchingNextPage;
 
   /* ----------------------- */
   /* Suggestions base lists  */
@@ -561,9 +694,9 @@ export default function ProductsPage() {
 
   // Vendor suggestions
   const vendorOptions = useMemo(() => {
-    if (!query.data) return [];
+    if (!productsQuery.data) return [];
     const set = new Set<string>();
-    for (const page of query.data.pages) {
+    for (const page of productsQuery.data.pages) {
       for (const item of page.items) {
         if (item.vendor) set.add(item.vendor);
       }
@@ -571,13 +704,13 @@ export default function ProductsPage() {
     return Array.from(set)
       .sort((a, b) => a.localeCompare(b))
       .map((v) => ({ value: v, label: v }));
-  }, [query.data]);
+  }, [productsQuery.data]);
 
   // Collection suggestions
   const collectionOptions = useMemo(() => {
-    if (!query.data) return [];
+    if (!productsQuery.data) return [];
     const set = new Set<string>();
-    for (const page of query.data.pages) {
+    for (const page of productsQuery.data.pages) {
       for (const item of page.items) {
         const collections = ((item as any).collections ?? []) as any[];
         for (const c of collections) {
@@ -589,13 +722,13 @@ export default function ProductsPage() {
     return Array.from(set)
       .sort((a, b) => a.localeCompare(b))
       .map((v) => ({ value: v, label: v }));
-  }, [query.data]);
+  }, [productsQuery.data]);
 
   // Category suggestions
   const categoryOptions = useMemo(() => {
-    if (!query.data) return [];
+    if (!productsQuery.data) return [];
     const set = new Set<string>();
-    for (const page of query.data.pages) {
+    for (const page of productsQuery.data.pages) {
       for (const item of page.items) {
         const cat = ((item as any).category ?? "") as string;
         if (cat) set.add(cat);
@@ -604,13 +737,13 @@ export default function ProductsPage() {
     return Array.from(set)
       .sort((a, b) => a.localeCompare(b))
       .map((v) => ({ value: v, label: v }));
-  }, [query.data]);
+  }, [productsQuery.data]);
 
   // Product type suggestions
   const productTypeOptions = useMemo(() => {
-    if (!query.data) return [];
+    if (!productsQuery.data) return [];
     const set = new Set<string>();
-    for (const page of query.data.pages) {
+    for (const page of productsQuery.data.pages) {
       for (const item of page.items) {
         const t = item.productType ?? "";
         if (t) set.add(t);
@@ -619,11 +752,11 @@ export default function ProductsPage() {
     return Array.from(set)
       .sort((a, b) => a.localeCompare(b))
       .map((v) => ({ value: v, label: v }));
-  }, [query.data]);
+  }, [productsQuery.data]);
 
   // Option name suggestions
   const optionNameOptions = useMemo(() => {
-    if (!query.data)
+    if (!productsQuery.data)
       return {
         option1Name: [] as { value: string; label: string }[],
         option2Name: [] as { value: string; label: string }[],
@@ -632,7 +765,7 @@ export default function ProductsPage() {
     const s1 = new Set<string>();
     const s2 = new Set<string>();
     const s3 = new Set<string>();
-    for (const page of query.data.pages) {
+    for (const page of productsQuery.data.pages) {
       for (const item of page.items) {
         const pAny = item as any;
         if (pAny.option1Name) s1.add(pAny.option1Name as string);
@@ -650,11 +783,11 @@ export default function ProductsPage() {
       option2Name: toOptions(s2),
       option3Name: toOptions(s3),
     };
-  }, [query.data]);
+  }, [productsQuery.data]);
 
   // Variant option value suggestions
   const variantOptionValueOptions = useMemo(() => {
-    if (!query.data)
+    if (!productsQuery.data)
       return {
         variantOption1Value: [] as { value: string; label: string }[],
         variantOption2Value: [] as { value: string; label: string }[],
@@ -663,7 +796,7 @@ export default function ProductsPage() {
     const s1 = new Set<string>();
     const s2 = new Set<string>();
     const s3 = new Set<string>();
-    for (const page of query.data.pages) {
+    for (const page of productsQuery.data.pages) {
       for (const item of page.items) {
         const variants = ((item as any).variants ?? []) as any[];
         for (const v of variants) {
@@ -683,13 +816,13 @@ export default function ProductsPage() {
       variantOption2Value: toOptions(s2),
       variantOption3Value: toOptions(s3),
     };
-  }, [query.data]);
+  }, [productsQuery.data]);
 
   // Theme template suggestions
   const templateSuffixOptions = useMemo(() => {
-    if (!query.data) return [];
+    if (!productsQuery.data) return [];
     const set = new Set<string>();
-    for (const page of query.data.pages) {
+    for (const page of productsQuery.data.pages) {
       for (const item of page.items) {
         const tpl = ((item as any).templateSuffix ?? "") as string;
         if (tpl) set.add(tpl);
@@ -698,13 +831,13 @@ export default function ProductsPage() {
     return Array.from(set)
       .sort((a, b) => a.localeCompare(b))
       .map((v) => ({ value: v, label: v }));
-  }, [query.data]);
+  }, [productsQuery.data]);
 
   // Tag suggestions
   const tagOptions = useMemo(() => {
-    if (!query.data) return [];
+    if (!productsQuery.data) return [];
     const set = new Set<string>();
-    for (const page of query.data.pages) {
+    for (const page of productsQuery.data.pages) {
       for (const item of page.items) {
         const tags = (item.tags ?? []) as string[];
         for (const t of tags) {
@@ -715,17 +848,17 @@ export default function ProductsPage() {
     return Array.from(set)
       .sort((a, b) => a.localeCompare(b))
       .map((v) => ({ value: v, label: v }));
-  }, [query.data]);
+  }, [productsQuery.data]);
 
   /* ----------------------- */
   /* Filtered + sorted items */
   /* ----------------------- */
 
   const allItems: ProductLiteDto[] = useMemo(() => {
-    if (!query.data) return [];
-    let result = query.data.pages.flatMap((p) => p.items);
+    if (!productsQuery.data) return [];
+    let result = productsQuery.data.pages.flatMap((p) => p.items);
 
-    // Search term
+    // Search term (client-side for now)
     if (searchTerm) {
       const q = searchTerm.toLowerCase();
       result = result.filter((p) => {
@@ -767,7 +900,7 @@ export default function ProductsPage() {
       );
     }
 
-    // String filters (with operators)
+    // String filters (with operators) – still applied client-side for now
     for (const cfg of STRING_FILTER_CONFIG) {
       const { key } = cfg;
       const val = appliedStringFilters[key].trim().toLowerCase();
@@ -807,7 +940,9 @@ export default function ProductsPage() {
 
           // Variant-level
           case "variantSku":
-            return variants.some((v) => matchStringValue(v.sku ?? "", val, op));
+            return variants.some((v) =>
+              matchStringValue(v.sku ?? "", val, op),
+            );
           case "variantBarcode":
             return variants.some((v) =>
               matchStringValue(v.barcode ?? "", val, op),
@@ -851,7 +986,7 @@ export default function ProductsPage() {
       });
     }
 
-    // Boolean filters
+    // Boolean filters (client-side)
     for (const cfg of BOOLEAN_FILTER_CONFIG) {
       const { key } = cfg;
       const want = appliedBooleanFilters[key];
@@ -887,10 +1022,10 @@ export default function ProductsPage() {
       });
     }
 
-    // Numeric filters
+    // Numeric filters (client-side)
     for (const cfg of NUMERIC_FILTER_CONFIG) {
       const { key } = cfg;
-      const f = appliedNumericFilters[key];
+      const f = appliedNumericFilters[cfg.key];
       if (!f.value.trim()) continue;
 
       result = result.filter((p) => {
@@ -1013,7 +1148,7 @@ export default function ProductsPage() {
 
     return result;
   }, [
-    query.data,
+    productsQuery.data,
     searchTerm,
     appliedStatusFilter,
     appliedCreatedDate,
@@ -1652,9 +1787,19 @@ export default function ProductsPage() {
                       </Text>
                     )}
                   </InlineStack>
-                  {status.syncEnqueued && (
-                    <Badge tone="attention">Sync enqueued</Badge>
-                  )}
+
+                  <InlineStack gap="200" blockAlign="center">
+                    {status.syncEnqueued && (
+                      <Badge tone="attention">Sync enqueued</Badge>
+                    )}
+                    <Button
+                      size="slim"
+                      onClick={() => fastSync.mutate()}
+                      loading={fastSync.isPending}
+                    >
+                      Sync FAST plane
+                    </Button>
+                  </InlineStack>
                 </InlineStack>
               ) : (
                 <Text as="p" variant="bodySm" tone="subdued">
@@ -1689,7 +1834,6 @@ export default function ProductsPage() {
                   >
                     Search
                   </Button>
-                  {/* No global Apply filters button – each filter has its own Add button */}
 
                   <Select
                     label="Sort field"
@@ -1812,11 +1956,11 @@ export default function ProductsPage() {
                   ))}
                 </IndexTable>
 
-                {query.hasNextPage && (
+                {productsQuery.hasNextPage && (
                   <Box padding="400">
                     <InlineStack align="center">
                       <Button
-                        onClick={() => query.fetchNextPage()}
+                        onClick={() => productsQuery.fetchNextPage()}
                         loading={loadingMore}
                       >
                         Load more

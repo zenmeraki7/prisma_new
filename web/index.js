@@ -1,4 +1,4 @@
-// web/index.js
+// FILE: web/index.js
 import "dotenv/config"; // MUST be first
 import { join } from "path";
 import { readFileSync } from "fs";
@@ -104,7 +104,7 @@ function buildProductWhereFromFilter(shopId, filterExpr) {
         };
       } else if (filterId === "product.tags" && op === "contains") {
         // ProductTag join: some(tag contains value)
-        where.tags = {
+        where.tagsJoin = {
           some: {
             tag: { contains: String(value), mode: "insensitive" },
           },
@@ -623,13 +623,16 @@ app.post("/api/graphql", async (req, res) => {
           JSON.stringify(where, null, 2),
         );
 
+        const offset = after ? parseInt(after, 10) : 0;
+
         const items = await prisma.productLite.findMany({
           where,
           orderBy: { updatedAtShopify: "desc" },
           take: first,
-          skip: after ? parseInt(after, 10) : 0,
+          skip: offset,
           include: {
-            tags: true,
+            // ✅ relation name on ProductLite
+            tagsJoin: true,
           },
         });
 
@@ -644,15 +647,13 @@ app.post("/api/graphql", async (req, res) => {
           status: item.status,
           vendor: item.vendor,
           productType: item.productType,
-          tags: item.tags.map((t) => t.tag),
+          tags: (item.tagsJoin || []).map((t) => t.tag),
           hasImages: item.hasImages,
           updatedAtShopify: item.updatedAtShopify,
         }));
 
         const nextCursor =
-          items.length === first
-            ? String((after ? parseInt(after, 10) : 0) + items.length)
-            : null;
+          items.length === first ? String(offset + items.length) : null;
 
         return res.json({
           data: {
@@ -856,7 +857,7 @@ app.post("/api/graphql", async (req, res) => {
           shopId: shop.id,
           id: { in: productIds },
         },
-        include: { tags: true },
+        include: { tagsJoin: true }, // ✅ use relation, not scalar
       });
 
       const items = products.map((item) => ({
@@ -866,7 +867,7 @@ app.post("/api/graphql", async (req, res) => {
         status: item.status,
         vendor: item.vendor,
         productType: item.productType,
-        tags: item.tags.map((t) => t.tag),
+        tags: (item.tagsJoin || []).map((t) => t.tag),
         hasImages: item.hasImages,
         updatedAtShopify: item.updatedAtShopify,
       }));

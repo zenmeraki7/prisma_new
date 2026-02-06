@@ -1,21 +1,26 @@
-// web/frontend/queries/productsByFilter.ts
-import { graphqlRequest } from "../../lib/graphqlClient";
+// FILE: web/frontend/queries/productsByFilter.ts
+
 import type { AppBridgeState } from "@shopify/app-bridge-react";
-import type { FilterExpr } from "../../lib/filters/dsl";
+import { graphqlRequest } from "../../lib/graphqlClient";
 import type { ProductLiteDto } from "../types/product";
-import type { FilterExecutionMode } from "./planFilter";
+
+export type ProductsByFilterMode = "FAST_ONLY" | "SNAPSHOT" | "HYBRID";
 
 export type ProductsByFilterPageDto = {
   items: ProductLiteDto[];
   nextCursor: string | null;
-  planHash?: string | null;
+  mode: ProductsByFilterMode;
 };
 
-export type ProductsByFilterResponse = {
-  productsByFilter: ProductsByFilterPageDto;
+type ProductsByFilterResponse = {
+  productsByFilter: {
+    items: ProductLiteDto[];
+    nextCursor: string | null;
+    mode: ProductsByFilterMode;
+  };
 };
 
-const PRODUCTS_BY_FILTER_QUERY = `
+const PRODUCTS_BY_FILTER_QUERY = /* GraphQL */ `
   query ProductsByFilter($input: ProductsByFilterInput!) {
     productsByFilter(input: $input) {
       items {
@@ -30,34 +35,40 @@ const PRODUCTS_BY_FILTER_QUERY = `
         updatedAtShopify
       }
       nextCursor
-      planHash
+      mode
     }
   }
 `;
 
+type ProductsByFilterRequestParams = {
+  first: number;
+  after?: string | null;
+  /**
+   * FilterExpr JSON AST produced by buildFilterExpr on the frontend.
+   */
+  filter?: unknown;
+};
+
 export async function productsByFilterRequest(
   app: AppBridgeState,
-  params: {
-    filter: FilterExpr | null;
-    mode: FilterExecutionMode;
-    first: number;
-    after?: string | null;
-  }
+  params: ProductsByFilterRequestParams,
 ): Promise<ProductsByFilterPageDto> {
-  const input = {
-    filter:
-      params.filter ?? { type: "group", op: "and" as const, children: [] },
-    mode: params.mode,
-    first: params.first,
-    after: params.after ?? null,
-  };
-
   const res = await graphqlRequest<ProductsByFilterResponse>(
     app,
     PRODUCTS_BY_FILTER_QUERY,
-    { input }
+    {
+      input: {
+        mode: "FAST_ONLY",                 // 👈 IMPORTANT
+        first: params.first,
+        after: params.after ?? null,
+        filter: params.filter ?? null,
+      },
+    },
   );
 
-  return res.productsByFilter;
+  return {
+    items: res.productsByFilter.items,
+    nextCursor: res.productsByFilter.nextCursor,
+    mode: res.productsByFilter.mode,
+  };
 }
-export { ProductLiteDto }; // if using regular `type` export

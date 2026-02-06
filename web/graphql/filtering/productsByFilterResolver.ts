@@ -1,9 +1,8 @@
-// web/graphql/filtering/productsByFilterResolver.ts
+// FILE: web/graphql/filtering/productsByFilterResolver.ts
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../../db/prisma.js";
 
 import type { FilterExpr } from "../../lib/filters/dsl.js";
-import { FILTER_REGISTRY } from "../../lib/filters/registry.js";
 import { astFromJson } from "../../lib/filters/astFromJson.js";
 import { compileFastWhere } from "../../lib/filters/fastCompiler.js";
 import type { FilterExecutionMode } from "./planFilterResolver.js";
@@ -38,14 +37,11 @@ export async function productsByFilterResolver(
     );
   }
 
-  // 3) AST → Prisma where fragment (FAST filters only)
-  const fastWhere = compileFastWhere(expr, FILTER_REGISTRY);
-
-  // 4) Full where with tenant isolation
-  const where: Prisma.ProductLiteWhereInput = {
+  // 3) AST → Prisma where fragment (FAST filters only).
+  //    compileFastWhere already injects shopId isolation.
+  const where: Prisma.ProductLiteWhereInput = compileFastWhere(expr, {
     shopId: ctx.shopId,
-    ...fastWhere,
-  };
+  });
 
   const pageSize = Math.min(Math.max(first ?? 50, 1), 200);
 
@@ -59,13 +55,30 @@ export async function productsByFilterResolver(
           skip: 1,
         }
       : {}),
+    include: {
+      // assuming relation name is tagsJoin here as well
+      tagsJoin: true,
+    },
   });
 
   const hasNextPage = rows.length > pageSize;
   const items = hasNextPage ? rows.slice(0, pageSize) : rows;
 
+  // shape compatible with your frontend DTO
+  const mapped = items.map((item) => ({
+    id: item.id,
+    title: item.title,
+    handle: item.handle,
+    status: item.status,
+    vendor: item.vendor,
+    productType: item.productType,
+    tags: (item as any).tagsJoin?.map((t: any) => t.tag) ?? [],
+    hasImages: item.hasImages,
+    updatedAtShopify: item.updatedAtShopify,
+  }));
+
   return {
-    items,                                        // ProductLite rows
+    items: mapped,
     nextCursor: hasNextPage ? items[items.length - 1].id : null,
     planHash: null,
   };
