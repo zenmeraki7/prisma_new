@@ -1,22 +1,14 @@
-// web/jobs/queue.ts
 import { Queue } from "bullmq";
-import IORedis from "ioredis";
+import { redis } from "../workers/bootstrap";
 
-const redisUrl = process.env.REDIS_URL;
-if (!redisUrl) throw new Error("REDIS_URL is required");
-
-export const redis = new IORedis(redisUrl, {
-  maxRetriesPerRequest: null,
+export const snapshotBuildQueue = new Queue("snapshot-build", {
+  connection: redis,
 });
 
-export const FAST_SYNC_QUEUE_NAME = "fast_sync";
-
-export const fastSyncQueue = new Queue(FAST_SYNC_QUEUE_NAME, {
+export const snapshotGcQueue = new Queue("snapshot-gc", {
   connection: redis,
-  defaultJobOptions: {
-    removeOnComplete: 2000,
-    removeOnFail: 5000,
-    attempts: 3,
-    backoff: { type: "exponential", delay: 2000 },
-  },
+});
+
+export const bulkEditQueue = new Queue("bulk-edit", {
+  connection: redis,
 });

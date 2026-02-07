@@ -1,42 +1,51 @@
-// FILE: web/scripts/createTestSnapshotRun.js
 import "dotenv/config";
-import { prisma, SnapshotRunStatus } from "../db/prisma.js";
+import { prisma } from "../db/prisma.js";
+import { SnapshotRunState } from "@prisma/client";
 
 async function main() {
-  // Must match shopDomain in DB exactly:
   const TARGET_SHOP_DOMAIN = "demo-zen-store.myshopify.com";
+  const PLAN_HASH = "test-plan-hash";
 
+  // ---------- FIND SHOP ----------
   const shop = await prisma.shop.findUnique({
     where: { shopDomain: TARGET_SHOP_DOMAIN },
   });
 
   if (!shop) {
     console.error("❌ No Shop row found for", TARGET_SHOP_DOMAIN);
-    console.error(
-      "   Make sure you've opened the app and run syncProductsToDb at least once for that shop."
-    );
     return;
   }
 
-  console.log("Using shop", shop.id, shop.shopDomain);
+  console.log("Using shop:", shop.id, shop.shopDomain);
 
-  const run = await prisma.snapshotRun.create({
-    data: {
+  // ---------- UPSERT SNAPSHOT RUN ----------
+  const run = await prisma.snapshotRun.upsert({
+    where: {
+      shopId_planHash: {
+        shopId: shop.id,
+        planHash: PLAN_HASH,
+      },
+    },
+    update: {
+      state: SnapshotRunState.QUEUED,
+      progress: 0,
+      total: 10,
+      errorMessage: null,
+    },
+    create: {
       shopId: shop.id,
-      planHash: "test-plan-hash",
-      filterSummary: "Dummy: status = ACTIVE",
-
-      // ✅ use enum, not raw string
-      status: SnapshotRunStatus.COMPLETED,
-
-      progress: 10,
+      planHash: PLAN_HASH,
+      state: SnapshotRunState.QUEUED,
+      progress: 0,
       total: 10,
       errorMessage: null,
     },
   });
 
-  console.log("✅ Created SnapshotRun:", run.id.toString());
+  console.log("✅ SnapshotRun ready:", run.id.toString());
 
+  // ---------- OPTIONAL EVENTS ----------
+  // createMany will fail if model missing, but in your schema it exists
   await prisma.snapshotRunEvent.createMany({
     data: [
       {
@@ -54,12 +63,12 @@ async function main() {
     ],
   });
 
-  console.log("✅ Created SnapshotRunEvents.");
+  console.log("✅ SnapshotRunEvents created");
 }
 
 main()
-  .catch((e) => {
-    console.error(e);
+  .catch((err) => {
+    console.error("❌ Error:", err);
   })
   .finally(async () => {
     await prisma.$disconnect();

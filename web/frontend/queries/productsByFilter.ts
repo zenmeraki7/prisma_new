@@ -1,28 +1,56 @@
-// FILE: web/frontend/queries/productsByFilter.ts
-
 import type { AppBridgeState } from "@shopify/app-bridge-react";
 import { graphqlRequest } from "../../lib/graphqlClient";
 import type { ProductLiteDto } from "../types/product";
 
-export type ProductsByFilterMode = "FAST_ONLY" | "SNAPSHOT" | "HYBRID";
+/* -----------------------------
+   Execution plan types
+----------------------------- */
 
-export type ProductsByFilterPageDto = {
-  items: ProductLiteDto[];
-  nextCursor: string | null;
-  mode: ProductsByFilterMode;
+export type ExecutionMode = "FAST" | "SNAPSHOT";
+
+export type PlanExplain = {
+  code:
+    | "UNSUPPORTED_FAST_FILTER"
+    | "VARIANT_LEVEL_FILTER"
+    | "FULL_TEXT_SEARCH"
+    | "SORT_NOT_INDEXED";
+  filterId?: string;
+  field?: string;
+  detail?: string;
 };
 
+/* -----------------------------
+   DTO
+----------------------------- */
+
+export type ProductsByFilterPageDto = {
+  planHash: string;
+  executionMode: ExecutionMode;
+  explain: PlanExplain[];
+
+  items: ProductLiteDto[];
+  nextCursor: string | null;
+};
+
+/* -----------------------------
+   GraphQL
+----------------------------- */
+
 type ProductsByFilterResponse = {
-  productsByFilter: {
-    items: ProductLiteDto[];
-    nextCursor: string | null;
-    mode: ProductsByFilterMode;
-  };
+  productsByFilter: ProductsByFilterPageDto;
 };
 
 const PRODUCTS_BY_FILTER_QUERY = /* GraphQL */ `
   query ProductsByFilter($input: ProductsByFilterInput!) {
     productsByFilter(input: $input) {
+      planHash
+      executionMode
+      explain {
+        code
+        filterId
+        field
+        detail
+      }
       items {
         id
         title
@@ -35,18 +63,30 @@ const PRODUCTS_BY_FILTER_QUERY = /* GraphQL */ `
         updatedAtShopify
       }
       nextCursor
-      mode
     }
   }
 `;
 
+/* -----------------------------
+   Request
+----------------------------- */
+
 type ProductsByFilterRequestParams = {
   first: number;
   after?: string | null;
+
   /**
-   * FilterExpr JSON AST produced by buildFilterExpr on the frontend.
+   * FilterExpr JSON AST produced by buildFilterExpr
    */
   filter?: unknown;
+
+  /**
+   * Optional sort (planner-aware)
+   */
+  sort?: {
+    field: string;
+    direction: "asc" | "desc";
+  };
 };
 
 export async function productsByFilterRequest(
@@ -58,17 +98,13 @@ export async function productsByFilterRequest(
     PRODUCTS_BY_FILTER_QUERY,
     {
       input: {
-        mode: "FAST_ONLY",                 // 👈 IMPORTANT
         first: params.first,
         after: params.after ?? null,
         filter: params.filter ?? null,
+        sort: params.sort ?? null,
       },
     },
   );
 
-  return {
-    items: res.productsByFilter.items,
-    nextCursor: res.productsByFilter.nextCursor,
-    mode: res.productsByFilter.mode,
-  };
+  return res.productsByFilter;
 }

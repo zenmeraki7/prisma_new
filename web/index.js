@@ -35,7 +35,7 @@ function serializePrisma(value) {
   }
 
   if (value instanceof Date) {
-    // Let Express / JSON.stringify handle Date normally by returning it
+    // Let Express / JSON.stringify handle Date normally
     return value;
   }
 
@@ -51,12 +51,6 @@ function serializePrisma(value) {
 }
 
 // ──────────────────────────────────────────────
-// Express app
-// ──────────────────────────────────────────────
-const app = express();
-app.use(express.json());
-
-// ──────────────────────────────────────────────
 // Runtime DB test
 // ──────────────────────────────────────────────
 async function testDbConnection() {
@@ -69,12 +63,31 @@ async function testDbConnection() {
 }
 
 // ──────────────────────────────────────────────
-// Shared helpers
+// Filter helpers
 // ──────────────────────────────────────────────
+
+function parseBooleanInput(value) {
+  if (typeof value === "boolean") return value;
+  if (value == null) return false;
+  const s = String(value).trim().toLowerCase();
+  return s === "true" || s === "1" || s === "yes" || s === "y";
+}
+
+function parseNumberInput(value) {
+  if (typeof value === "number") return value;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function parseDateInput(value) {
+  if (value instanceof Date) return value;
+  const d = new Date(String(value));
+  return Number.isNaN(d.getTime()) ? null : d;
+}
 
 /**
  * Map your filter DSL (same shape used by productsByFilter) to a ProductLite where.
- * This guarantees FAST plane and SNAPSHOT plane see exactly the same product set.
+ * Supports product + variant + rollup filters.
  *
  * @param {string} shopId
  * @param {any} filterExpr
@@ -84,41 +97,316 @@ function buildProductWhereFromFilter(shopId, filterExpr) {
   /** @type {import('@prisma/client').Prisma.ProductLiteWhereInput} */
   const where = { shopId };
 
-  if (filterExpr && filterExpr.type === "group" && Array.isArray(filterExpr.children)) {
-    for (const child of filterExpr.children) {
-      if (child.type !== "leaf") continue;
+  if (
+    !filterExpr ||
+    filterExpr.type !== "group" ||
+    !Array.isArray(filterExpr.children)
+  ) {
+    return where;
+  }
 
-      const { filterId, op, value } = child;
+  for (const child of filterExpr.children) {
+    if (!child || child.type !== "leaf") continue;
 
-      if (filterId === "product.status" && op === "eq") {
-        where.status = String(value).toUpperCase();
-      } else if (filterId === "product.vendor" && op === "contains") {
-        where.vendor = {
-          contains: String(value),
-          mode: "insensitive",
-        };
-      } else if (filterId === "product.productType" && op === "contains") {
-        where.productType = {
-          contains: String(value),
-          mode: "insensitive",
-        };
-      } else if (filterId === "product.tags" && op === "contains") {
-        // ProductTag join: some(tag contains value)
-        where.tagsJoin = {
-          some: {
-            tag: { contains: String(value), mode: "insensitive" },
-          },
-        };
-      } else if (filterId === "product.hasImages" && op === "eq") {
-        where.hasImages = Boolean(value);
-      } else if (filterId === "product.totalInventory" && op === "gte") {
-        // VariantRollup to-one relation: is.totalInventory.gte
+    const { filterId, op, value } = child;
+
+    // ───────────────── PRODUCT FIELDS ─────────────────
+
+    if (filterId === "product.category" && op === "contains") {
+      where.category = {
+        contains: String(value),
+        mode: "insensitive",
+      };
+    } else if (filterId === "product.collection" && op === "contains") {
+      // Match either collection title or handle
+      where.collections = {
+        some: {
+          OR: [
+            {
+              collectionTitle: {
+                contains: String(value),
+                mode: "insensitive",
+              },
+            },
+            {
+              collectionHandle: {
+                contains: String(value),
+                mode: "insensitive",
+              },
+            },
+          ],
+        },
+      };
+    } else if (filterId === "product.createdAt" && op === "gte") {
+      const d = parseDateInput(value);
+      if (d) {
+        where.createdAtShopify = { gte: d };
+      }
+    } else if (filterId === "product.publishedAt" && op === "gte") {
+      const d = parseDateInput(value);
+      if (d) {
+        where.publishedAtShopify = { gte: d };
+      }
+    } else if (filterId === "product.updatedAt" && op === "gte") {
+      const d = parseDateInput(value);
+      if (d) {
+        where.updatedAtShopify = { gte: d };
+      }
+    } else if (filterId === "product.description" && op === "contains") {
+      where.description = {
+        contains: String(value),
+        mode: "insensitive",
+      };
+    } else if (filterId === "product.handle" && op === "contains") {
+      where.handle = {
+        contains: String(value),
+        mode: "insensitive",
+      };
+    } else if (filterId === "product.inventoryQuantity" && op === "gte") {
+      const n = parseNumberInput(value);
+      if (n != null) {
+        // Use rollup relation if present
         where.variantRollup = {
           is: {
-            totalInventory: { gte: Number(value) },
+            totalInventory: { gte: n },
           },
         };
       }
+    } else if (filterId === "product.option1Name" && op === "contains") {
+      where.option1Name = {
+        contains: String(value),
+        mode: "insensitive",
+      };
+    } else if (filterId === "product.option2Name" && op === "contains") {
+      where.option2Name = {
+        contains: String(value),
+        mode: "insensitive",
+      };
+    } else if (filterId === "product.option3Name" && op === "contains") {
+      where.option3Name = {
+        contains: String(value),
+        mode: "insensitive",
+      };
+    } else if (filterId === "product.productId" && op === "contains") {
+      // Shopify GID
+      where.productId = {
+        contains: String(value),
+        mode: "insensitive",
+      };
+    } else if (filterId === "product.productType" && op === "contains") {
+      where.productType = {
+        contains: String(value),
+        mode: "insensitive",
+      };
+    } else if (filterId === "product.isSearchable" && op === "eq") {
+      where.isSearchable = parseBooleanInput(value);
+    } else if (filterId === "product.status" && op === "contains") {
+      // allow contains for UX, but case-insensitive
+      where.status = {
+        contains: String(value).toUpperCase(),
+        mode: "insensitive",
+      };
+    } else if (filterId === "product.tag" && op === "contains") {
+      // From normalized ProductTag join
+      where.tagsJoin = {
+        some: {
+          tag: { contains: String(value), mode: "insensitive" },
+        },
+      };
+    } else if (filterId === "product.templateSuffix" && op === "contains") {
+      where.templateSuffix = {
+        contains: String(value),
+        mode: "insensitive",
+      };
+    } else if (filterId === "product.title" && op === "contains") {
+      where.title = {
+        contains: String(value),
+        mode: "insensitive",
+      };
+    } else if (filterId === "product.variantCount" && op === "gte") {
+      const n = parseNumberInput(value);
+      if (n != null) {
+        where.variantCount = { gte: n };
+      }
+    } else if (filterId === "product.vendor" && op === "contains") {
+      where.vendor = {
+        contains: String(value),
+        mode: "insensitive",
+      };
+    } else if (filterId === "product.visibleOnlineStore" && op === "eq") {
+      where.visibleOnlineStore = parseBooleanInput(value);
+    } else if (filterId === "product.visiblePos" && op === "eq") {
+      where.visiblePos = parseBooleanInput(value);
+    }
+
+    // ───────────────── VARIANT / ROLLUP FIELDS ─────────────────
+
+    else if (filterId === "variant.barcode" && op === "contains") {
+      where.variants = {
+        some: {
+          barcode: { contains: String(value), mode: "insensitive" },
+        },
+      };
+    } else if (filterId === "variant.taxable" && op === "eq") {
+      where.variants = {
+        some: {
+          taxable: parseBooleanInput(value),
+        },
+      };
+    } else if (filterId === "variant.compareAtPrice" && op === "gte") {
+      const n = parseNumberInput(value);
+      if (n != null) {
+        where.variants = {
+          some: {
+            compareAtPrice: { gte: n },
+          },
+        };
+      }
+    } else if (filterId === "variant.inventoryLocation" && op === "contains") {
+      where.inventoryByLoc = {
+        some: {
+          locationId: {
+            contains: String(value),
+            mode: "insensitive",
+          },
+          hasInventory: true,
+        },
+      };
+    } else if (filterId === "variant.cost" && op === "gte") {
+      const n = parseNumberInput(value);
+      if (n != null) {
+        where.variants = {
+          some: {
+            cost: { gte: n },
+          },
+        };
+      }
+    } else if (filterId === "variant.countryOfOrigin" && op === "contains") {
+      where.variants = {
+        some: {
+          countryOfOrigin: {
+            contains: String(value),
+            mode: "insensitive",
+          },
+        },
+      };
+    } else if (filterId === "variant.hsTariffCode" && op === "contains") {
+      where.variants = {
+        some: {
+          hsTariffCode: {
+            contains: String(value),
+            mode: "insensitive",
+          },
+        },
+      };
+    } else if (filterId === "variant.inventoryPolicy" && op === "contains") {
+      where.variants = {
+        some: {
+          inventoryPolicy: {
+            contains: String(value),
+            mode: "insensitive",
+          },
+        },
+      };
+    } else if (filterId === "variant.option1Value" && op === "contains") {
+      where.variants = {
+        some: {
+          option1Value: {
+            contains: String(value),
+            mode: "insensitive",
+          },
+        },
+      };
+    } else if (filterId === "variant.option2Value" && op === "contains") {
+      where.variants = {
+        some: {
+          option2Value: {
+            contains: String(value),
+            mode: "insensitive",
+          },
+        },
+      };
+    } else if (filterId === "variant.option3Value" && op === "contains") {
+      where.variants = {
+        some: {
+          option3Value: {
+            contains: String(value),
+            mode: "insensitive",
+          },
+        },
+      };
+    } else if (filterId === "variant.physical" && op === "eq") {
+      // backed by VariantRollup.hasPhysical
+      where.variantRollup = {
+        is: {
+          hasPhysical: parseBooleanInput(value),
+        },
+      };
+    } else if (filterId === "variant.price" && op === "gte") {
+      const n = parseNumberInput(value);
+      if (n != null) {
+        // any variant with price ≥ n (rollup)
+        where.variantRollup = {
+          is: {
+            maxPrice: { gte: n },
+          },
+        };
+      }
+    } else if (filterId === "variant.profitMargin" && op === "gte") {
+      const n = parseNumberInput(value);
+      if (n != null) {
+        // use maxMargin from VariantRollup (percentage)
+        where.variantRollup = {
+          is: {
+            maxMargin: { gte: n },
+          },
+        };
+      }
+    } else if (filterId === "variant.sku" && op === "contains") {
+      where.variants = {
+        some: {
+          sku: { contains: String(value), mode: "insensitive" },
+        },
+      };
+    } else if (filterId === "variant.trackQuantity" && op === "eq") {
+      where.variants = {
+        some: {
+          trackQuantity: parseBooleanInput(value),
+        },
+      };
+    } else if (filterId === "variant.inventoryQty" && op === "gte") {
+      const n = parseNumberInput(value);
+      if (n != null) {
+        where.variants = {
+          some: {
+            inventoryQty: { gte: n },
+          },
+        };
+      }
+    } else if (filterId === "variant.title" && op === "contains") {
+      where.variants = {
+        some: {
+          title: { contains: String(value), mode: "insensitive" },
+        },
+      };
+    } else if (filterId === "variant.weightGrams" && op === "gte") {
+      const n = parseNumberInput(value);
+      if (n != null) {
+        where.variants = {
+          some: {
+            weightGrams: { gte: n },
+          },
+        };
+      }
+    } else if (filterId === "variant.weightUnit" && op === "contains") {
+      where.variants = {
+        some: {
+          weightUnit: {
+            contains: String(value),
+            mode: "insensitive",
+          },
+        },
+      };
     }
   }
 
@@ -126,43 +414,29 @@ function buildProductWhereFromFilter(shopId, filterExpr) {
 }
 
 /**
- * Real snapshot builder:
- *  - Creates a SnapshotRun row
- *  - Selects product IDs from FAST plane based on filter
- *  - Inserts SnapshotProduct rows in batches
- *  - Updates progress + events
- *
- * NOTE: this is synchronous in-process. For production you’ll move the inner loop
- * into a BullMQ worker, but the semantics will stay the same.
+ * Real snapshot builder for the new SnapshotRun / SnapshotProduct schema.
+ * - Creates a SnapshotRun row
+ * - Selects product IDs from FAST plane based on filter
+ * - Inserts SnapshotProduct rows in batches (compressed JSON)
  */
-async function buildSnapshotForPlanHash({ shop, planHash, filterExpr, filterSummary }) {
-  // 1) Create run row in RUNNING / 0 progress
+async function buildSnapshotForPlanHash({ shop, planHash, filterExpr }) {
+  // TTL for snapshot (e.g. 7 days)
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+  // 1) Create run row in RUNNING
   const run = await prisma.snapshotRun.create({
     data: {
       shopId: shop.id,
       planHash,
-      filterSummary: filterSummary ?? null,
       state: "RUNNING",
-      progress: 0,
-      total: 0,
-      errorMessage: null,
+      productCount: 0,
+      approxBytes: BigInt(0),
+      reuseCount: 0,
+      expiresAt,
     },
   });
 
   const runId = run.id;
-
-  async function logEvent(kind, message) {
-    await prisma.snapshotRunEvent.create({
-      data: {
-        shopId: shop.id,
-        snapshotRunId: runId,
-        kind,
-        message,
-      },
-    });
-  }
-
-  await logEvent("INFO", "Snapshot run started.");
 
   try {
     const where = buildProductWhereFromFilter(shop.id, filterExpr);
@@ -170,16 +444,10 @@ async function buildSnapshotForPlanHash({ shop, planHash, filterExpr, filterSumm
     // 2) Count total matching products
     const total = await prisma.productLite.count({ where });
 
-    await prisma.snapshotRun.update({
-      where: { id: runId },
-      data: { total },
-    });
-
-    await logEvent("INFO", `Planning snapshot for ${total} products.`);
-
-    // 3) Walk products in batches and insert membership rows
+    // 3) Walk products in batches and insert snapshot rows
     const pageSize = 500;
     let processed = 0;
+    let approxBytes = BigInt(0);
     let offset = 0;
 
     while (true) {
@@ -189,40 +457,46 @@ async function buildSnapshotForPlanHash({ shop, planHash, filterExpr, filterSumm
         skip: offset,
         take: pageSize,
         select: {
-          id: true,
-          updatedAtShopify: true,
+          productId: true, // use Shopify GID as membership key
         },
       });
 
       if (!batch.length) break;
 
-      await prisma.snapshotProduct.createMany({
-        data: batch.map((p) => ({
+      const data = batch.map((p) => {
+        const payload = { productId: p.productId };
+        const buf = Buffer.from(JSON.stringify(payload), "utf-8");
+        approxBytes += BigInt(buf.byteLength);
+
+        return {
+          id: `${runId}:${p.productId}`,
           shopId: shop.id,
           snapshotRunId: runId,
-          productId: p.id,
-          sortKey: p.updatedAtShopify ?? new Date(),
-        })),
+          productId: p.productId,
+          dataCompressed: buf,
+          compression: "json",
+        };
+      });
+
+      await prisma.snapshotProduct.createMany({
+        data,
         skipDuplicates: true,
       });
 
       processed += batch.length;
       offset += batch.length;
-
-      await prisma.snapshotRun.update({
-        where: { id: runId },
-        data: { progress: processed },
-      });
-
-      await logEvent("INFO", `Processed ${processed} of ${total} products.`);
     }
 
+    // 4) Mark run as succeeded
     await prisma.snapshotRun.update({
       where: { id: runId },
-      data: { state: "SUCCEEDED" },
+      data: {
+        state: "SUCCEEDED",
+        productCount: processed,
+        approxBytes,
+        completedAt: new Date(),
+      },
     });
-
-    await logEvent("INFO", `Snapshot completed for ${total} products.`);
 
     return await prisma.snapshotRun.findUnique({ where: { id: runId } });
   } catch (err) {
@@ -232,15 +506,19 @@ async function buildSnapshotForPlanHash({ shop, planHash, filterExpr, filterSumm
       where: { id: runId },
       data: {
         state: "FAILED",
-        errorMessage: err.message ?? "Snapshot failed",
+        completedAt: new Date(),
       },
     });
-
-    await logEvent("ERROR", err.message ?? "Snapshot failed with unknown error.");
 
     throw err;
   }
 }
+
+// ──────────────────────────────────────────────
+// Express app
+// ──────────────────────────────────────────────
+const app = express();
+app.use(express.json());
 
 // ──────────────────────────────────────────────
 // Shopify authentication + webhooks
@@ -388,31 +666,24 @@ app.post("/api/graphql", async (req, res) => {
           `🔄 syncProductsToDb: first=${first}, after=${after}, shopDomain=${shopDomain}`,
         );
 
-        // Ensure Shop record exists first
-        await prisma.shop.upsert({
+        // 1) Ensure Shop record exists.
+        //    Use shopDomain as canonical shopId (matches Shop.id).
+        const shop = await prisma.shop.upsert({
           where: { shopDomain },
           update: {
             accessToken: session.accessToken,
             updatedAt: new Date(),
           },
           create: {
+            id: shopDomain,
             shopDomain,
             accessToken: session.accessToken,
           },
         });
 
-        console.log(`✅ Shop row ensured for ${shopDomain}`);
-
-        const shop = await prisma.shop.findUnique({
-          where: { shopDomain },
-        });
-
-        if (!shop) {
-          throw new Error("Shop record not found after upsert");
-        }
-
         console.log(`🔑 Using shop.id=${shop.id} for foreign key`);
 
+        // 2) Pull products from Shopify (include createdAt / publishedAt / variants)
         const shopifyQuery = `
           query SyncProducts($first: Int!, $after: String) {
             products(first: $first, after: $after) {
@@ -426,6 +697,8 @@ app.post("/api/graphql", async (req, res) => {
                   vendor
                   productType
                   tags
+                  createdAt
+                  publishedAt
                   updatedAt
                   images(first: 1) {
                     edges {
@@ -453,49 +726,15 @@ app.post("/api/graphql", async (req, res) => {
         const response = await client.request(shopifyQuery, {
           variables: { first, after },
         });
-        const edges = response?.data?.products?.edges || [];
 
+        const edges = response?.data?.products?.edges || [];
         console.log(`📦 Fetched ${edges.length} products from Shopify`);
 
-        // Save to database
+        // 3) Save to FAST plane tables
         for (const edge of edges) {
           const p = edge.node;
 
           try {
-            await prisma.productLite.upsert({
-              where: {
-                shopId_id: {
-                  shopId: shop.id,
-                  id: p.id,
-                },
-              },
-              update: {
-                title: p.title,
-                handle: p.handle,
-                status: p.status,
-                vendor: p.vendor || null,
-                productType: p.productType || null,
-                hasImages: (p.images?.edges?.length || 0) > 0,
-                updatedAtShopify: p.updatedAt
-                  ? new Date(p.updatedAt)
-                  : null,
-              },
-              create: {
-                shopId: shop.id,
-                id: p.id,
-                title: p.title,
-                handle: p.handle,
-                status: p.status,
-                vendor: p.vendor || null,
-                productType: p.productType || null,
-                hasImages: (p.images?.edges?.length || 0) > 0,
-                updatedAtShopify: p.updatedAt
-                  ? new Date(p.updatedAt)
-                  : null,
-              },
-            });
-
-            // VariantRollup rollups (totalInventory)
             const variants = p.variants?.edges?.map((e) => e.node) ?? [];
 
             const totalInventory = variants.reduce((sum, v) => {
@@ -506,6 +745,85 @@ app.post("/api/graphql", async (req, res) => {
               return sum + qty;
             }, 0);
 
+            // Price stats for rollup + ProductLite
+            const priceNumbers = variants
+              .map((v) => {
+                if (v.price == null) return null;
+                const n =
+                  typeof v.price === "string" ? Number(v.price) : v.price;
+                return Number.isFinite(n) ? n : null;
+              })
+              .filter((n) => n != null);
+
+            const hasPrice = priceNumbers.length > 0;
+            const minPriceRaw =
+              hasPrice ? Math.min(...priceNumbers) : null;
+            const maxPriceRaw =
+              hasPrice ? Math.max(...priceNumbers) : null;
+
+            // For VariantRollup (non-nullable Decimal fields),
+            // fall back to 0 if we don't have any prices.
+            const minPriceRollup = hasPrice ? minPriceRaw : 0;
+            const maxPriceRollup = hasPrice ? maxPriceRaw : 0;
+
+            // ---- ProductLite ----
+            await prisma.productLite.upsert({
+              where: {
+                // from @@unique([shopId, productId])
+                shopId_productId: {
+                  shopId: shop.id,
+                  productId: p.id, // Shopify GID
+                },
+              },
+              update: {
+                title: p.title,
+                handle: p.handle,
+                status: p.status,
+                vendor: p.vendor || null,
+                productType: p.productType || null,
+                tags: p.tags || [],
+                hasImages: (p.images?.edges?.length || 0) > 0,
+                createdAtShopify: p.createdAt
+                  ? new Date(p.createdAt)
+                  : new Date(),
+                updatedAtShopify: p.updatedAt
+                  ? new Date(p.updatedAt)
+                  : new Date(),
+                publishedAtShopify: p.publishedAt
+                  ? new Date(p.publishedAt)
+                  : null,
+                totalInventory,
+                variantCount: variants.length || null,
+                minPrice: hasPrice ? minPriceRaw : null,
+                maxPrice: hasPrice ? maxPriceRaw : null,
+              },
+              create: {
+                shopId: shop.id,
+                productId: p.id,
+                title: p.title,
+                handle: p.handle,
+                status: p.status,
+                vendor: p.vendor || null,
+                productType: p.productType || null,
+                tags: p.tags || [],
+                hasImages: (p.images?.edges?.length || 0) > 0,
+                createdAtShopify: p.createdAt
+                  ? new Date(p.createdAt)
+                  : new Date(),
+                updatedAtShopify: p.updatedAt
+                  ? new Date(p.updatedAt)
+                  : new Date(),
+                publishedAtShopify: p.publishedAt
+                  ? new Date(p.publishedAt)
+                  : null,
+                totalInventory,
+                variantCount: variants.length || null,
+                minPrice: hasPrice ? minPriceRaw : null,
+                maxPrice: hasPrice ? maxPriceRaw : null,
+              },
+            });
+
+            // ---- VariantRollup ----
             await prisma.variantRollup.upsert({
               where: {
                 shopId_productId: {
@@ -515,15 +833,21 @@ app.post("/api/graphql", async (req, res) => {
               },
               update: {
                 totalInventory,
+                variantCount: variants.length || null,
+                minPrice: minPriceRollup,
+                maxPrice: maxPriceRollup,
               },
               create: {
                 shopId: shop.id,
                 productId: p.id,
                 totalInventory,
+                variantCount: variants.length || null,
+                minPrice: minPriceRollup,
+                maxPrice: maxPriceRollup,
               },
             });
 
-            // tags
+            // ---- tags (normalized) ----
             if (p.tags && p.tags.length > 0) {
               await prisma.productTag.deleteMany({
                 where: { shopId: shop.id, productId: p.id },
@@ -631,7 +955,6 @@ app.post("/api/graphql", async (req, res) => {
           take: first,
           skip: offset,
           include: {
-            // ✅ relation name on ProductLite
             tagsJoin: true,
           },
         });
@@ -641,7 +964,7 @@ app.post("/api/graphql", async (req, res) => {
         );
 
         const transformedItems = items.map((item) => ({
-          id: item.id,
+          id: item.productId, // Shopify GID for frontend
           title: item.title,
           handle: item.handle,
           status: item.status,
@@ -677,11 +1000,10 @@ app.post("/api/graphql", async (req, res) => {
       }
     }
 
-    // ───────────────── triggerSnapshotRun (build real snapshot) ─────────────────
+    // ───────────────── triggerSnapshotRun ─────────────────
     if (query.includes("triggerSnapshotRun")) {
       const planHash = variables?.planHash;
       const filterExpr = variables?.filterJson ?? null;
-      const filterSummary = variables?.filterSummary ?? null;
 
       if (!planHash || typeof planHash !== "string") {
         return res
@@ -703,7 +1025,6 @@ app.post("/api/graphql", async (req, res) => {
         shop,
         planHash,
         filterExpr,
-        filterSummary,
       });
 
       return res.json({
@@ -767,12 +1088,12 @@ app.post("/api/graphql", async (req, res) => {
         data: {
           snapshotStatus: {
             state: latestRun.state,
-            progress: latestRun.progress,
-            total: latestRun.total,
-            errorMessage: latestRun.errorMessage,
-            filterSummary: latestRun.filterSummary,
+            progress: latestRun.productCount, // we only know final count
+            total: latestRun.productCount,
+            errorMessage: null,
+            filterSummary: null,
             planHash: latestRun.planHash,
-            snapshotRunId: String(latestRun.id), // BigInt-safe
+            snapshotRunId: String(latestRun.id),
           },
         },
       });
@@ -830,7 +1151,7 @@ app.post("/api/graphql", async (req, res) => {
           shopId: shop.id,
           snapshotRunId: latestRun.id,
         },
-        orderBy: { sortKey: "desc" },
+        orderBy: { id: "asc" },
         skip: offset,
         take: first,
         select: {
@@ -855,13 +1176,13 @@ app.post("/api/graphql", async (req, res) => {
       const products = await prisma.productLite.findMany({
         where: {
           shopId: shop.id,
-          id: { in: productIds },
+          productId: { in: productIds }, // Shopify GIDs
         },
-        include: { tagsJoin: true }, // ✅ use relation, not scalar
+        include: { tagsJoin: true },
       });
 
       const items = products.map((item) => ({
-        id: item.id,
+        id: item.productId, // Shopify GID outward
         title: item.title,
         handle: item.handle,
         status: item.status,
@@ -886,7 +1207,7 @@ app.post("/api/graphql", async (req, res) => {
       });
     }
 
-    // ───────────────── snapshotRuns (connection style for SnapshotJobsPage) ─────────────────
+    // ───────────────── snapshotRuns (connection style) ─────────────────
     if (query.includes("snapshotRuns")) {
       const first = Number(variables?.first ?? 25);
       const after = variables?.after ?? null;
@@ -932,77 +1253,6 @@ app.post("/api/graphql", async (req, res) => {
       return res.json({
         data: {
           snapshotRuns: {
-            edges,
-            pageInfo: {
-              hasNextPage,
-              endCursor,
-            },
-          },
-        },
-      });
-    }
-
-    // ───────────────── snapshotRunEvents (supports both simple + connection shapes) ─────────────────
-    if (query.includes("snapshotRunEvents")) {
-      const runId = variables?.runId;
-      if (!runId) {
-        return res
-          .status(400)
-          .json({ errors: [{ message: "runId is required" }] });
-      }
-
-      const first = Number(variables?.first ?? 50);
-      const after = variables?.after ?? null;
-
-      const shop = await prisma.shop.findUnique({
-        where: { shopDomain },
-      });
-
-      if (!shop) {
-        console.log("⚠️ No Shop row for domain", shopDomain);
-        return res.json({
-          data: {
-            snapshotRunEvents: {
-              // simple shape
-              events: [],
-              nextCursor: null,
-              // connection shape
-              edges: [],
-              pageInfo: {
-                hasNextPage: false,
-                endCursor: null,
-              },
-            },
-          },
-        });
-      }
-
-      const offset = after ? parseInt(after, 10) : 0;
-
-      const events = await prisma.snapshotRunEvent.findMany({
-        where: { snapshotRunId: runId, shopId: shop.id },
-        orderBy: { createdAt: "desc" },
-        take: first,
-        skip: offset,
-      });
-
-      const safeEvents = events.map((ev) => serializePrisma(ev));
-
-      const edges = safeEvents.map((ev, idx) => ({
-        cursor: String(offset + idx + 1),
-        node: ev,
-      }));
-
-      const hasNextPage = events.length === first;
-      const endCursor = hasNextPage ? String(offset + events.length) : null;
-
-      return res.json({
-        data: {
-          snapshotRunEvents: {
-            // simple shape
-            events: safeEvents,
-            nextCursor: endCursor,
-            // connection shape
             edges,
             pageInfo: {
               hasNextPage,

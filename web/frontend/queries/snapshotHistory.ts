@@ -1,155 +1,113 @@
-// web/frontend/queries/snapshotHistory.ts
 import type { AppBridgeState } from "@shopify/app-bridge-react";
 import { graphqlRequest } from "../../lib/graphqlClient";
 
-/**
- * Snapshot run lifecycle as exposed via GraphQL.
- * Keep this aligned with backend SnapshotRunStatus enum.
- */
-export type SnapshotRunStatus =
+/* -----------------------------
+   Snapshot States
+----------------------------- */
+export type SnapshotRunState =
   | "QUEUED"
   | "RUNNING"
-  | "INGESTING"
-  | "COMPLETED"
-  | "FAILED";
+  | "SUCCEEDED"
+  | "FAILED"
+  | "CANCELLED"
+  | "EXPIRED";
 
+/* -----------------------------
+   DTOs
+----------------------------- */
 export type SnapshotRunDto = {
   id: string;
   planHash: string;
-  status: SnapshotRunStatus;
-  progress: number;
-  total: number;
-  errorMessage?: string | null;
-  filterSummary?: string | null;
+  state: SnapshotRunState;
+
+  productCount: number;
+  approxBytes: string;
+
   createdAt: string;
-  updatedAt: string;
-  expiresAt?: string | null;
+  completedAt?: string | null;
+  expiresAt: string;
 };
 
 export type SnapshotRunEventDto = {
   id: string;
-  kind: string;
-  message?: string | null;
+  runId: string;
+  message: string;
+  level: "INFO" | "WARN" | "ERROR";
   createdAt: string;
 };
 
-type SnapshotRunsResponse = {
-  snapshotRuns: {
-    edges: {
-      cursor: string;
-      node: SnapshotRunDto;
-    }[];
-    pageInfo: {
-      hasNextPage: boolean;
-      endCursor?: string | null;
-    };
-  };
+/* -----------------------------
+   GraphQL Types
+----------------------------- */
+type SnapshotHistoryResponse = {
+  snapshotHistory: SnapshotRunDto[];
 };
 
 type SnapshotRunEventsResponse = {
-  snapshotRunEvents: {
-    edges: {
-      cursor: string;
-      node: SnapshotRunEventDto;
-    }[];
-    pageInfo: {
-      hasNextPage: boolean;
-      endCursor?: string | null;
-    };
-  };
+  snapshotRunEvents: SnapshotRunEventDto[];
 };
 
-const SNAPSHOT_RUNS_QUERY = `
-  query SnapshotRuns($first: Int!, $after: String) {
-    snapshotRuns(first: $first, after: $after) {
-      edges {
-        cursor
-        node {
-          id
-          planHash
-          status
-          progress
-          total
-          errorMessage
-          filterSummary
-          createdAt
-          updatedAt
-          expiresAt
-        }
-      }
-      pageInfo {
-        hasNextPage
-        endCursor
-      }
+/* -----------------------------
+   GraphQL Queries
+----------------------------- */
+const SNAPSHOT_HISTORY_QUERY = `
+  query SnapshotHistory($limit: Int!) {
+    snapshotHistory(limit: $limit) {
+      id
+      planHash
+      state
+      productCount
+      approxBytes
+      createdAt
+      completedAt
+      expiresAt
     }
   }
 `;
 
 const SNAPSHOT_RUN_EVENTS_QUERY = `
-  query SnapshotRunEvents($runId: ID!, $first: Int!, $after: String) {
-    snapshotRunEvents(runId: $runId, first: $first, after: $after) {
-      edges {
-        cursor
-        node {
-          id
-          kind
-          message
-          createdAt
-        }
-      }
-      pageInfo {
-        hasNextPage
-        endCursor
-      }
+  query SnapshotRunEvents($runId: ID!) {
+    snapshotRunEvents(runId: $runId) {
+      id
+      runId
+      message
+      level
+      createdAt
     }
   }
 `;
 
+/* -----------------------------
+   Requests
+----------------------------- */
 export async function snapshotRunsRequest(
   app: AppBridgeState,
-  params: { first: number; after?: string | null }
+  params: { limit?: number } = {},
 ): Promise<{ runs: SnapshotRunDto[]; nextCursor: string | null }> {
-  const res = await graphqlRequest<SnapshotRunsResponse>(
+  const res = await graphqlRequest<SnapshotHistoryResponse>(
     app,
-    SNAPSHOT_RUNS_QUERY,
-    {
-      first: params.first,
-      after: params.after ?? null,
-    }
+    SNAPSHOT_HISTORY_QUERY,
+    { limit: params.limit ?? 20 },
   );
 
-  const edges = res.snapshotRuns.edges;
-  const runs = edges.map((e) => e.node);
-  const nextCursor =
-    res.snapshotRuns.pageInfo.hasNextPage &&
-    res.snapshotRuns.pageInfo.endCursor
-      ? res.snapshotRuns.pageInfo.endCursor
-      : null;
-
-  return { runs, nextCursor };
+  return {
+    runs: res.snapshotHistory,
+    nextCursor: null,
+  };
 }
 
 export async function snapshotRunEventsRequest(
   app: AppBridgeState,
-  params: { runId: string; first: number; after?: string | null }
+  params: { runId: string },
 ): Promise<{ events: SnapshotRunEventDto[]; nextCursor: string | null }> {
   const res = await graphqlRequest<SnapshotRunEventsResponse>(
     app,
     SNAPSHOT_RUN_EVENTS_QUERY,
-    {
-      runId: params.runId,
-      first: params.first,
-      after: params.after ?? null,
-    }
+    { runId: params.runId },
   );
 
-  const edges = res.snapshotRunEvents.edges;
-  const events = edges.map((e) => e.node);
-  const nextCursor =
-    res.snapshotRunEvents.pageInfo.hasNextPage &&
-    res.snapshotRunEvents.pageInfo.endCursor
-      ? res.snapshotRunEvents.pageInfo.endCursor
-      : null;
-
-  return { events, nextCursor };
+  return {
+    events: res.snapshotRunEvents,
+    nextCursor: null,
+  };
 }

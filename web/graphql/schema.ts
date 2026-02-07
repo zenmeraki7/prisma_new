@@ -326,5 +326,11 @@ const resolvers = {
 
 export const schema = createSchema({
   typeDefs,
-  resolvers,
+  resolvers: {
+    Query: {
+      productsByFilter: productsByFilterResolver,
+      snapshotStatus: snapshotStatusResolver,
+      snapshotHistory: snapshotHistoryResolver,
+    },
+  },
 });

@@ -1,3 +1,5 @@
+// FILE: prisma/schema.prisma
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -6,6 +8,10 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
+//
+// FAST PLANE
+// ---------------------------------------------------------------------------
 
 /// Lean per-product FAST plane row.
 /// One row per (shopId, productId)
@@ -37,7 +43,9 @@ model ProductLite {
   variantCount       Int?                       @map("variant_count")
   visibleOnlineStore Boolean                    @default(true) @map("visible_online_store")
   visiblePos         Boolean                    @default(false) @map("visible_pos")
+
   id                 BigInt                     @id @default(autoincrement())
+
   collections        ProductCollection[]
   inventoryByLoc     ProductInventoryLocation[]
   optionValues       ProductOptionValue[]
@@ -46,6 +54,9 @@ model ProductLite {
   variantRollup      VariantRollup?
 
   @@unique([shopId, productId], map: "product_lite_shop_product_uniq")
+
+  // Core access patterns
+  @@index([shopId, id])
   @@index([shopId, status, id])
   @@index([shopId, vendor, id])
   @@index([shopId, productType, id])
@@ -54,18 +65,22 @@ model ProductLite {
   @@index([shopId, publishedAtShopify, id])
   @@index([shopId, handle])
   @@index([shopId, title])
+
+  // FAST tag filters (array GIN)
   @@index([tags], type: Gin)
 }
 
-/// Rollups per product for variant stats
+/// Rollups per product for variant stats (FAST plane)
 model VariantRollup {
   shopId                 String
   productId              String
+
   id                     BigInt      @id @default(autoincrement())
-  maxPrice               Decimal     @map("max_price")
-  minPrice               Decimal     @map("min_price")
+  maxPrice               Decimal?    @map("max_price")
+  minPrice               Decimal?    @map("min_price")
   totalInventory         Int         @map("total_inventory")
   variantCount           Int         @map("variant_count")
+
   allContinueSelling     Boolean     @default(false) @map("all_continue_selling")
   allTaxable             Boolean     @default(false) @map("all_taxable")
   allTrackQuantity       Boolean     @default(false) @map("all_track_quantity")
@@ -73,6 +88,7 @@ model VariantRollup {
   anyTaxable             Boolean     @default(false) @map("any_taxable")
   anyTrackQuantity       Boolean     @default(false) @map("any_track_quantity")
   hasPhysical            Boolean     @default(false) @map("has_physical")
+
   maxCompareAtPrice      Decimal?    @map("max_compare_at_price")
   maxCost                Decimal?    @map("max_cost")
   maxInventoryPerVariant Int?        @map("max_inventory_per_variant")
@@ -83,9 +99,12 @@ model VariantRollup {
   minInventoryPerVariant Int?        @map("min_inventory_per_variant")
   minMargin              Decimal?    @map("min_margin")
   minWeightGrams         Int?        @map("min_weight_grams")
+
   product                ProductLite @relation(fields: [shopId, productId], references: [shopId, productId])
 
   @@unique([shopId, productId])
+
+  // Numeric filters on rollups
   @@index([shopId, totalInventory, id])
   @@index([shopId, minPrice, id])
   @@index([shopId, maxPrice, id])
@@ -101,6 +120,7 @@ model ProductTag {
   shopId    String
   productId String
   tag       String
+
   id        BigInt      @id @default(autoincrement())
   product   ProductLite @relation(fields: [shopId, productId], references: [shopId, productId])
 
@@ -115,6 +135,7 @@ model ProductCollection {
   collectionId     String
   collectionHandle String?     @map("collection_handle")
   collectionTitle  String?     @map("collection_title")
+
   id               BigInt      @id @default(autoincrement())
   product          ProductLite @relation(fields: [shopId, productId], references: [shopId, productId])
 
@@ -145,6 +166,7 @@ model VariantLite {
   title           String?
   countryOfOrigin String?
   hsTariffCode    String?
+
   product         ProductLite @relation(fields: [shopId, productId], references: [shopId, productId])
 
   @@unique([shopId, variantId])
@@ -161,6 +183,7 @@ model ProductOptionValue {
   productId   String
   optionIndex Int
   value       String
+
   product     ProductLite @relation(fields: [shopId, productId], references: [shopId, productId])
 
   @@unique([shopId, productId, optionIndex, value])
@@ -175,76 +198,122 @@ model ProductInventoryLocation {
   locationId    String
   hasInventory  Boolean     @default(false)
   totalQuantity Int?
+
   product       ProductLite @relation(fields: [shopId, productId], references: [shopId, productId])
 
   @@unique([shopId, productId, locationId])
   @@index([shopId, locationId, productId])
 }
 
-/// Snapshot run status for UI + backend.
-enum SnapshotRunStatus {
+//
+// SNAPSHOT SYSTEM (membership snapshot used by index.js)
+// ---------------------------------------------------------------------------
+
+enum SnapshotRunState {
   QUEUED
   RUNNING
-  INGESTING
-  COMPLETED
+  SUCCEEDED
   FAILED
+  CANCELLED
 }
 
-model Shop {
-  /// Internal ID for this shop (you can use Shopify GID or your own UUID)
-  id           String        @id
-  /// Shopify domain like "demo-zen-store.myshopify.com"
-  shopDomain   String        @unique
-  createdAt    DateTime      @default(now())
-  /// Optional access token (for API calls)
-  accessToken  String?
-  updatedAt    DateTime      @updatedAt
-
-  snapshotRuns SnapshotRun[]
-}
-
-/// One snapshot run per “bulk filter execution”
 model SnapshotRun {
+  id            BigInt           @id @default(autoincrement())
   shopId        String
   planHash      String
-  filterSummary String
+  filterSummary String?
 
-  /// Aligns with GraphQL enum SnapshotRunStatus
-  status        SnapshotRunStatus      @default(QUEUED)
+  state         SnapshotRunState @default(QUEUED)
 
-  progress      Int                    @default(0)
-  total         Int                    @default(0)
+  progress      Int              @default(0)
+  total         Int              @default(0)
   errorMessage  String?
 
-  /// Shopify Bulk Operation linkage
-  bulkOperationId     String?
-  bulkOperationStatus String?
-  bulkOperationUrl    String?
+  createdAt     DateTime         @default(now())
 
-  /// How many candidates were found in FAST plane
-  candidateCount      Int?
-
-  /// Full serialized filter JSON (for debugging / replay)
-  filterJson          Json?
-
-  createdAt     DateTime               @default(now())
-  updatedAt     DateTime               @updatedAt
-  id            BigInt                 @id @default(autoincrement())
-  shop          Shop                   @relation(fields: [shopId], references: [id])
+  shop          Shop             @relation(fields: [shopId], references: [id])
+  products      SnapshotProduct[]
   events        SnapshotRunEvent[]
 
-  @@index([shopId, status, id])
+  @@unique([shopId, planHash])   // <<< IMPORTANT
+  @@index([shopId, state, createdAt])
 }
 
-/// Log lines / milestones for a snapshot run
-model SnapshotRunEvent {
+
+model SnapshotProduct {
+  id            BigInt      @id @default(autoincrement())
   shopId        String
+  snapshotRunId BigInt
+  productId     BigInt
+  sortKey       DateTime
+
+  run           SnapshotRun @relation(fields: [snapshotRunId], references: [id])
+
+  @@index([shopId, snapshotRunId, sortKey])
+}
+
+model SnapshotRunEvent {
+  id            BigInt      @id @default(autoincrement())
+  shopId        String
+  snapshotRunId BigInt
   kind          String
   message       String
   createdAt     DateTime    @default(now())
-  id            BigInt      @id @default(autoincrement())
-  snapshotRunId BigInt
+
   run           SnapshotRun @relation(fields: [snapshotRunId], references: [id])
 
-  @@index([shopId, snapshotRunId, id])
+  @@index([shopId, snapshotRunId, createdAt])
+}
+
+//
+// BULK EDIT JOBS
+// ---------------------------------------------------------------------------
+
+model BulkEditJob {
+  id           String   @id @default(cuid())
+  shopId       String
+  planHash     String
+
+  action       Json
+  state        String   // QUEUED | RUNNING | SUCCEEDED | FAILED
+
+  total        Int      @default(0)
+  processed    Int      @default(0)
+  failed       Int      @default(0)
+  errorMessage String?
+
+  createdAt    DateTime @default(now())
+  completedAt  DateTime?
+
+  shop         Shop     @relation(fields: [shopId], references: [id])
+
+  @@index([shopId, planHash])
+  @@index([shopId, state, createdAt])
+}
+
+//
+// SHOP (TENANT ROOT)
+// ---------------------------------------------------------------------------
+
+model Shop {
+  /// Internal ID for this shop (we use the shopDomain as id)
+  id           String        @id
+
+  /// Shopify domain like "demo-zen-store.myshopify.com"
+  shopDomain   String        @unique
+
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  /// Optional access token (for API calls)
+  accessToken  String?
+
+  /// FAST plane sync status
+  fastReady        Boolean   @default(false)
+  fastRevision     Int       @default(0)
+  fastLastSyncAt   DateTime?
+  fastSyncEnqueued Boolean   @default(false)
+
+  snapshotRuns SnapshotRun[]
+  bulkEditJobs BulkEditJob[]
 }
