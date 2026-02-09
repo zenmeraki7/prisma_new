@@ -1,38 +1,22 @@
 // FILE: web/lib/filters/registry.ts
 
-/**
- * Single source of truth for all product/variant filters.
- *
- * - Backend:
- *   - Planner uses this to map FilterKey → plane/model/field/valueKind/operators.
- *   - Snapshot vs Fast plane is explicit and type-checked.
- * - Frontend:
- *   - A generator script can read this file and emit FILTERS.ts for UI widgets.
- * - GraphQL:
- *   - FilterKey, operators, and value kinds can be derived from these types to avoid drift.
- */
-
 import type {
   ProductLiteField,
   VariantLiteField,
-  SnapshotProductField,
+  VariantRollupField,
+  ProductContentField,
+  ProductCollectionField,
   VariantInventoryLocationField,
-} from "../../db/schema-types"; // you define this, types-only
+  SnapshotProductField,
+} from "../../db/schema-types";
+
+// ---------------------------------------------------------
+// Core types
+// ---------------------------------------------------------
 
 export type FilterScope = "product" | "variant";
-
-/**
- * Which plane the filter is natively evaluated on.
- * - FAST: ProductLite / VariantLite / VariantRollup / etc.
- * - SNAPSHOT: SnapshotProduct / SnapshotVariant (bulk-op plane).
- */
 export type FilterPlane = "FAST" | "SNAPSHOT";
 
-/**
- * Primitive type of the value this filter operates on.
- * - "text" vs "string":
- *   - "text" typically means free-form description/title, often tied to full-text search.
- */
 export type ValueKind =
   | "string"
   | "text"
@@ -41,29 +25,14 @@ export type ValueKind =
   | "date"
   | "enum";
 
-/**
- * Core operator vocabulary.
- */
 export type FilterOperator =
-  | "EQ"
-  | "NEQ"
-  | "IN"
-  | "NOT_IN"
-  | "CONTAINS"
-  | "NOT_CONTAINS"
-  | "STARTS_WITH"
-  | "ENDS_WITH"
-  | "GT"
-  | "GTE"
-  | "LT"
-  | "LTE"
-  | "BETWEEN"
-  | "IS_SET"
-  | "IS_NOT_SET";
+  | "EQ" | "NEQ" | "IN" | "NOT_IN"
+  | "CONTAINS" | "NOT_CONTAINS" | "STARTS_WITH" | "ENDS_WITH"
+  | "GT" | "GTE" | "LT" | "LTE" | "BETWEEN"
+  | "IS_SET" | "IS_NOT_SET";
 
-/**
- * UI hint. This is *only* used by the frontend generator; backend should not rely on this.
- */
+export type Operator = FilterOperator;
+
 export type FilterWidget =
   | "text"
   | "textarea"
@@ -72,142 +41,63 @@ export type FilterWidget =
   | "date"
   | "select";
 
-/**
- * Optional full-text search wiring.
- * This lets the planner route some filters to tsvector @@ to_tsquery(...)
- * instead of plain ILIKE, especially for large catalogs.
- */
 export interface FullTextConfig {
-  /**
-   * Plane hosting the tsvector column.
-   */
-  plane: FilterPlane;
-
-  /**
-   * Underlying Prisma model name that contains the tsvector column.
-   * Example: "SnapshotProduct".
-   */
-  model: ModelName;
-
-  /**
-   * Prisma field name for the tsvector column, e.g. "descriptionSearchVector".
-   */
   vectorField: string;
-
-  /**
-   * PostgreSQL text search configuration ("english", "simple", etc.).
-   */
   config?: string;
 }
 
 /**
- * Prisma model names we expose to the registry.
+ * Split FAST-plane models for optimization
  */
 export type ModelName =
   | "ProductLite"
   | "VariantLite"
+  | "VariantRollup"
+  | "ProductContent"
+  | "ProductCollection"
   | "SnapshotProduct"
   | "VariantInventoryLocation";
 
-/**
- * Map each model to its allowed field names (from schema-types.d.ts).
- */
 export interface ModelFieldMap {
   ProductLite: ProductLiteField;
   VariantLite: VariantLiteField;
+  VariantRollup: VariantRollupField;
+  ProductContent: ProductContentField;
+  ProductCollection: ProductCollectionField;
   SnapshotProduct: SnapshotProductField;
   VariantInventoryLocation: VariantInventoryLocationField;
 }
 
-/**
- * For fields that can contain multiple values.
- *
- * - "relation_some" → child relation with `some` / EXISTS
- * - "array_has"     → array @> scalar
- * - "array_has_every" → array @> array
- * - "array_overlap" → array && array
- */
 export type MultiValueStrategy =
   | "relation_some"
   | "array_has"
   | "array_has_every"
   | "array_overlap";
 
-/**
- * Where this filter actually reads from in Postgres.
- *
- * This is strongly typed: model/field pairs are checked against ModelFieldMap.
- */
 export interface DbBinding<M extends ModelName = ModelName> {
-  /**
-   * Logical plane (FAST vs SNAPSHOT).
-   */
   plane: FilterPlane;
-
-  /**
-   * Prisma model name, e.g. "ProductLite", "VariantLite".
-   */
   model: M;
-
-  /**
-   * Column/field name on that model.
-   * Type-safe via ModelFieldMap.
-   */
   field: ModelFieldMap[M];
 
-  /**
-   * Optional relation path (for planners that want to know join shape),
-   * e.g. "variants", "product", etc.
-   */
   relationPath?: string;
-
-  /**
-   * If true, this field is stored in a multi-valued way (arrays / join tables),
-   * so planner should use ANY/EXISTS semantics (e.g. tags, collections).
-   */
   multiValue?: boolean;
-
-  /**
-   * How multiValue is represented in Postgres/Prisma.
-   */
   multiValueStrategy?: MultiValueStrategy;
-
-  /**
-   * If true, this field is derived/computed rather than raw from Shopify.
-   */
   computed?: boolean;
-
-  /**
-   * Canonical SQL expression for computed fields.
-   * For views / $queryRaw, not necessarily used at runtime everywhere,
-   * but this prevents drift by centralizing the formula.
-   */
-  sqlExpression?: string;
-
-  /**
-   * Optional hint for index name (for EXPLAIN / migrations docs).
-   * Not used at runtime, but nice for tooling and audits.
-   */
   indexHint?: string;
+  requiresSnapshotRunId?: boolean;
 }
 
-/**
- * Enumerated options for enum-valued filters (status, visibility, etc.).
- */
 export interface EnumValue {
   value: string;
   label: string;
 }
 
-/**
- * FilterKey is a fully-qualified, stable identifier.
- *
- * IMPORTANT:
- * - This is what your GraphQL & frontend should use.
- * - Never break/change these without a migration for saved filters.
- */
+// ---------------------------------------------------------
+// Filter keys
+// ---------------------------------------------------------
+
 export type FilterKey =
-  // Product-scope filters
+  // Product
   | "product.category"
   | "product.collection"
   | "product.createdAt"
@@ -226,13 +116,14 @@ export type FilterKey =
   | "product.tag"
   | "product.template"
   | "product.title"
+  | "product.search"          // <-- NEW: generic search key
   | "product.variantCount"
   | "product.vendor"
   | "product.visibleOnlineStore"
   | "product.visiblePos"
   | "product.seoTitle"
   | "product.seoDescription"
-  // Variant-scope filters
+  // Variant
   | "variant.barcode"
   | "variant.chargeTax"
   | "variant.compareAtPrice"
@@ -260,52 +151,26 @@ export interface FilterDefinition<M extends ModelName = ModelName> {
   scope: FilterScope;
   valueKind: ValueKind;
   operators: FilterOperator[];
-
-  /**
-   * Where/how to read from Postgres, with type-safe model/field pairing.
-   */
   db: DbBinding<M>;
-
-  /**
-   * Optional enum values; if present you can auto-render a <Select>.
-   */
   enumValues?: EnumValue[];
-
-  /**
-   * Optional full-text search wiring.
-   */
   fullText?: FullTextConfig;
-
-  /**
-   * UI hints for generator script (not used by backend).
-   */
   ui?: {
     widget: FilterWidget;
-    /**
-     * If true, UI should show a multi-select control (for "IN"/"NOT_IN").
-     */
     multiSelect?: boolean;
-    /**
-     * Optional placeholder string.
-     */
     placeholder?: string;
   };
 }
 
-/**
- * Helper so each registry entry is type-checked:
- * - `model` must be a valid ModelName
- * - `field` must be valid for that model
- */
 export function defineFilter<M extends ModelName>(
   def: FilterDefinition<M>,
 ): FilterDefinition<M> {
   return def;
 }
 
-/**
- * Reusable operator sets by value kind.
- */
+// ---------------------------------------------------------
+// Operator sets (canonical)
+// ---------------------------------------------------------
+
 export const STRING_OPERATORS: FilterOperator[] = [
   "EQ",
   "NEQ",
@@ -319,12 +184,14 @@ export const STRING_OPERATORS: FilterOperator[] = [
   "IS_NOT_SET",
 ];
 
-export const TEXT_OPERATORS: FilterOperator[] = [
+export const TEXT_LIKE_OPERATORS: FilterOperator[] = [
   "CONTAINS",
   "NOT_CONTAINS",
   "IS_SET",
   "IS_NOT_SET",
 ];
+
+export const TEXT_FTS_OPERATORS: FilterOperator[] = ["CONTAINS"];
 
 export const NUMBER_OPERATORS: FilterOperator[] = [
   "EQ",
@@ -366,15 +233,20 @@ export const ENUM_OPERATORS: FilterOperator[] = [
   "NOT_IN",
 ];
 
-/**
- * MASTER REGISTRY
- *
- * IMPORTANT:
- * - This object is the **only** place you should add/rename filters.
- * - Backend planner, GraphQL types, and frontend config generator should all
- *   derive from here.
- */
-export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
+export const MULTIVALUE_STRING_OPERATORS: FilterOperator[] = [
+  "EQ",
+  "NEQ",
+  "IN",
+  "NOT_IN",
+  "IS_SET",
+  "IS_NOT_SET",
+];
+
+// ---------------------------------------------------------
+// MASTER REGISTRY
+// ---------------------------------------------------------
+
+export const FILTER_REGISTRY: { [K in FilterKey]: FilterDefinition } = {
   //
   // PRODUCT FIELDS
   //
@@ -388,11 +260,9 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
       plane: "FAST",
       model: "ProductLite",
       field: "category",
+      indexHint: "idx_product_lite_category_trgm",
     },
-    ui: {
-      widget: "text",
-      placeholder: "e.g. Apparel & Accessories",
-    },
+    ui: { widget: "text" },
   }),
 
   "product.collection": defineFilter({
@@ -400,19 +270,17 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
     label: "Collection",
     scope: "product",
     valueKind: "string",
-    operators: STRING_OPERATORS,
+    operators: MULTIVALUE_STRING_OPERATORS,
     db: {
       plane: "FAST",
-      model: "ProductLite",
-      field: "collections", // string[] column
+      model: "ProductCollection",
+      field: "collectionTitle",
+      relationPath: "collections",
       multiValue: true,
-      multiValueStrategy: "array_overlap", // GIN index: tags && ARRAY[...]
-      indexHint: "idx_product_lite_collections_gin",
+      multiValueStrategy: "relation_some",
+      indexHint: "idx_product_collection_title",
     },
-    ui: {
-      widget: "text",
-      placeholder: "Collection name",
-    },
+    ui: { widget: "text" },
   }),
 
   "product.createdAt": defineFilter({
@@ -425,10 +293,9 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
       plane: "FAST",
       model: "ProductLite",
       field: "createdAtShopify",
+      indexHint: "idx_product_lite_shop_created_at",
     },
-    ui: {
-      widget: "date",
-    },
+    ui: { widget: "date" },
   }),
 
   "product.publishedAt": defineFilter({
@@ -441,10 +308,9 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
       plane: "FAST",
       model: "ProductLite",
       field: "publishedAtShopify",
+      indexHint: "idx_product_lite_shop_published_at",
     },
-    ui: {
-      widget: "date",
-    },
+    ui: { widget: "date" },
   }),
 
   "product.updatedAt": defineFilter({
@@ -457,39 +323,34 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
       plane: "FAST",
       model: "ProductLite",
       field: "updatedAtShopify",
+      indexHint: "idx_product_lite_shop_updated_at",
     },
-    ui: {
-      widget: "date",
-    },
+    ui: { widget: "date" },
   }),
 
-  // Normal product description: SNAPSHOT + full-text
   "product.description": defineFilter({
     key: "product.description",
     label: "Description",
     scope: "product",
     valueKind: "text",
-    operators: TEXT_OPERATORS,
+    operators: TEXT_FTS_OPERATORS,
     db: {
-      plane: "SNAPSHOT",
-      model: "SnapshotProduct",
+      plane: "FAST",
+      model: "ProductContent",
       field: "description",
+      relationPath: "content",
+      indexHint: "idx_product_content_desc_fts",
     },
     fullText: {
-      plane: "SNAPSHOT",
-      model: "SnapshotProduct",
       vectorField: "descriptionSearchVector",
       config: "english",
     },
-    ui: {
-      widget: "textarea",
-      placeholder: "Text in description",
-    },
+    ui: { widget: "textarea" },
   }),
 
   "product.handle": defineFilter({
     key: "product.handle",
-    label: "Handle (URL)",
+    label: "Handle",
     scope: "product",
     valueKind: "string",
     operators: STRING_OPERATORS,
@@ -497,29 +358,25 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
       plane: "FAST",
       model: "ProductLite",
       field: "handle",
+      indexHint: "idx_product_lite_handle_trgm",
     },
-    ui: {
-      widget: "text",
-      placeholder: "e.g. my-product-handle",
-    },
+    ui: { widget: "text" },
   }),
 
   "product.inventoryQuantity": defineFilter({
     key: "product.inventoryQuantity",
-    label: "Inventory Quantity",
+    label: "Total Inventory",
     scope: "product",
     valueKind: "number",
     operators: NUMBER_OPERATORS,
     db: {
       plane: "FAST",
-      model: "ProductLite",
+      model: "VariantRollup",
       field: "totalInventory",
-      computed: false, // stored denormalized column
-      indexHint: "idx_product_lite_total_inventory",
+      relationPath: "rollup",
+      indexHint: "idx_variant_rollup_total_inventory",
     },
-    ui: {
-      widget: "number",
-    },
+    ui: { widget: "number" },
   }),
 
   "product.option1Name": defineFilter({
@@ -533,10 +390,7 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
       model: "ProductLite",
       field: "option1Name",
     },
-    ui: {
-      widget: "text",
-      placeholder: "e.g. Size",
-    },
+    ui: { widget: "text" },
   }),
 
   "product.option2Name": defineFilter({
@@ -550,10 +404,7 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
       model: "ProductLite",
       field: "option2Name",
     },
-    ui: {
-      widget: "text",
-      placeholder: "e.g. Color",
-    },
+    ui: { widget: "text" },
   }),
 
   "product.option3Name": defineFilter({
@@ -567,9 +418,7 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
       model: "ProductLite",
       field: "option3Name",
     },
-    ui: {
-      widget: "text",
-    },
+    ui: { widget: "text" },
   }),
 
   "product.id": defineFilter({
@@ -583,15 +432,12 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
       model: "ProductLite",
       field: "productId",
     },
-    ui: {
-      widget: "text",
-      placeholder: "Shopify product ID",
-    },
+    ui: { widget: "text" },
   }),
 
   "product.productType": defineFilter({
     key: "product.productType",
-    label: "Product Type (Custom)",
+    label: "Product Type",
     scope: "product",
     valueKind: "string",
     operators: STRING_OPERATORS,
@@ -599,17 +445,14 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
       plane: "FAST",
       model: "ProductLite",
       field: "productType",
+      indexHint: "idx_product_lite_product_type",
     },
-    ui: {
-      widget: "text",
-      placeholder: "e.g. T-Shirt",
-    },
+    ui: { widget: "text" },
   }),
 
-  // SNAPSHOT SEO visibility
   "product.searchEngineVisibility": defineFilter({
     key: "product.searchEngineVisibility",
-    label: "Search Engine Visibility (SEO)",
+    label: "SEO Visibility",
     scope: "product",
     valueKind: "enum",
     operators: ENUM_OPERATORS,
@@ -621,10 +464,10 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
       plane: "SNAPSHOT",
       model: "SnapshotProduct",
       field: "searchEngineVisibility",
+      requiresSnapshotRunId: true,
+      indexHint: "idx_snapshot_product_visibility",
     },
-    ui: {
-      widget: "select",
-    },
+    ui: { widget: "select" },
   }),
 
   "product.status": defineFilter({
@@ -642,10 +485,9 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
       plane: "FAST",
       model: "ProductLite",
       field: "status",
+      indexHint: "idx_product_lite_status",
     },
-    ui: {
-      widget: "select",
-    },
+    ui: { widget: "select" },
   }),
 
   "product.tag": defineFilter({
@@ -653,24 +495,21 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
     label: "Tag",
     scope: "product",
     valueKind: "string",
-    operators: STRING_OPERATORS,
+    operators: MULTIVALUE_STRING_OPERATORS,
     db: {
       plane: "FAST",
       model: "ProductLite",
-      field: "tags", // string[] column
+      field: "tags",
       multiValue: true,
       multiValueStrategy: "array_overlap",
-      indexHint: "idx_product_lite_tags_gin", // GIN (tags)
+      indexHint: "idx_product_lite_tags_gin",
     },
-    ui: {
-      widget: "text",
-      placeholder: "Tag value",
-    },
+    ui: { widget: "text" },
   }),
 
   "product.template": defineFilter({
     key: "product.template",
-    label: "Theme Template",
+    label: "Template",
     scope: "product",
     valueKind: "string",
     operators: STRING_OPERATORS,
@@ -679,10 +518,7 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
       model: "ProductLite",
       field: "templateSuffix",
     },
-    ui: {
-      widget: "text",
-      placeholder: "e.g. featured",
-    },
+    ui: { widget: "text" },
   }),
 
   "product.title": defineFilter({
@@ -690,21 +526,41 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
     label: "Title",
     scope: "product",
     valueKind: "text",
-    operators: TEXT_OPERATORS,
+    operators: TEXT_FTS_OPERATORS,
     db: {
       plane: "FAST",
       model: "ProductLite",
       field: "title",
+      indexHint: "idx_product_lite_title_fts",
     },
     fullText: {
+      vectorField: "titleSearchVector",
+      config: "english",
+    },
+    ui: { widget: "text" },
+  }),
+
+  // NEW: Generic "Search" filter (initially aliases title FTS).
+  // Later you can point this at a richer combined FTS column.
+  "product.search": defineFilter({
+    key: "product.search",
+    label: "Search",
+    scope: "product",
+    valueKind: "text",
+    operators: TEXT_FTS_OPERATORS,
+    db: {
       plane: "FAST",
       model: "ProductLite",
+      field: "title", // alias: same column as product.title for now
+      indexHint: "idx_product_lite_title_fts",
+    },
+    fullText: {
       vectorField: "titleSearchVector",
       config: "english",
     },
     ui: {
       widget: "text",
-      placeholder: "Text in title",
+      placeholder: "Search products…",
     },
   }),
 
@@ -716,14 +572,12 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
     operators: NUMBER_OPERATORS,
     db: {
       plane: "FAST",
-      model: "ProductLite",
+      model: "VariantRollup",
       field: "variantCount",
-      computed: false, // stored denormalized column
-      indexHint: "idx_product_lite_variant_count",
+      relationPath: "rollup",
+      indexHint: "idx_variant_rollup_variant_count",
     },
-    ui: {
-      widget: "number",
-    },
+    ui: { widget: "number" },
   }),
 
   "product.vendor": defineFilter({
@@ -736,91 +590,79 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
       plane: "FAST",
       model: "ProductLite",
       field: "vendor",
+      indexHint: "idx_product_lite_vendor_trgm",
     },
-    ui: {
-      widget: "text",
-      placeholder: "Vendor name",
-    },
+    ui: { widget: "text" },
   }),
 
   "product.visibleOnlineStore": defineFilter({
     key: "product.visibleOnlineStore",
-    label: "Visible on Online Store (web)",
+    label: "Online Store Visible",
     scope: "product",
     valueKind: "boolean",
     operators: BOOLEAN_OPERATORS,
     db: {
       plane: "FAST",
       model: "ProductLite",
-      field: "onlineStoreVisible",
+      field: "visibleOnlineStore",
+      indexHint: "idx_product_lite_visible_online",
     },
-    ui: {
-      widget: "boolean-toggle",
-    },
+    ui: { widget: "boolean-toggle" },
   }),
 
   "product.visiblePos": defineFilter({
     key: "product.visiblePos",
-    label: "Visible on Point of Sale (POS)",
+    label: "POS Visible",
     scope: "product",
     valueKind: "boolean",
     operators: BOOLEAN_OPERATORS,
     db: {
       plane: "FAST",
       model: "ProductLite",
-      field: "posVisible",
+      field: "visiblePos",
+      indexHint: "idx_product_lite_visible_pos",
     },
-    ui: {
-      widget: "boolean-toggle",
-    },
+    ui: { widget: "boolean-toggle" },
   }),
 
-  // SNAPSHOT SEO title (full-text)
   "product.seoTitle": defineFilter({
     key: "product.seoTitle",
     label: "SEO Title",
     scope: "product",
     valueKind: "text",
-    operators: TEXT_OPERATORS,
+    operators: TEXT_FTS_OPERATORS,
     db: {
-      plane: "SNAPSHOT",
-      model: "SnapshotProduct",
+      plane: "FAST",
+      model: "ProductContent",
       field: "seoTitle",
+      relationPath: "content",
+      indexHint: "idx_product_content_seo_title_fts",
     },
     fullText: {
-      plane: "SNAPSHOT",
-      model: "SnapshotProduct",
       vectorField: "seoTitleSearchVector",
       config: "english",
     },
-    ui: {
-      widget: "text",
-      placeholder: "Text in SEO title",
-    },
+    ui: { widget: "text" },
   }),
 
-  // SNAPSHOT SEO description (full-text)
   "product.seoDescription": defineFilter({
     key: "product.seoDescription",
     label: "SEO Description",
     scope: "product",
     valueKind: "text",
-    operators: TEXT_OPERATORS,
+    operators: TEXT_FTS_OPERATORS,
     db: {
-      plane: "SNAPSHOT",
-      model: "SnapshotProduct",
+      plane: "FAST",
+      model: "ProductContent",
       field: "seoDescription",
+      relationPath: "content",
+      indexHint: "idx_product_content_seo_desc_fts",
     },
     fullText: {
-      plane: "SNAPSHOT",
-      model: "SnapshotProduct",
       vectorField: "seoDescriptionSearchVector",
       config: "english",
     },
-    ui: {
-      widget: "textarea",
-      placeholder: "Text in SEO description",
-    },
+    ui: { widget: "textarea" },
   }),
 
   //
@@ -828,7 +670,7 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
   //
   "variant.barcode": defineFilter({
     key: "variant.barcode",
-    label: "Barcode (ISBN, UPC, GTIN, etc.)",
+    label: "Barcode",
     scope: "variant",
     valueKind: "string",
     operators: STRING_OPERATORS,
@@ -837,15 +679,14 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
       model: "VariantLite",
       field: "barcode",
       relationPath: "variants",
+      indexHint: "idx_variant_lite_barcode_trgm",
     },
-    ui: {
-      widget: "text",
-    },
+    ui: { widget: "text" },
   }),
 
   "variant.chargeTax": defineFilter({
     key: "variant.chargeTax",
-    label: "Charge tax on this product",
+    label: "Charge Tax",
     scope: "variant",
     valueKind: "boolean",
     operators: BOOLEAN_OPERATORS,
@@ -855,14 +696,12 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
       field: "taxable",
       relationPath: "variants",
     },
-    ui: {
-      widget: "boolean-toggle",
-    },
+    ui: { widget: "boolean-toggle" },
   }),
 
   "variant.compareAtPrice": defineFilter({
     key: "variant.compareAtPrice",
-    label: "Compare-at Price",
+    label: "Compare At Price",
     scope: "variant",
     valueKind: "number",
     operators: NUMBER_OPERATORS,
@@ -872,14 +711,12 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
       field: "compareAtPrice",
       relationPath: "variants",
     },
-    ui: {
-      widget: "number",
-    },
+    ui: { widget: "number" },
   }),
 
   "variant.inventoryLocation": defineFilter({
     key: "variant.inventoryLocation",
-    label: "Connected Inventory Location",
+    label: "Inventory Location",
     scope: "variant",
     valueKind: "string",
     operators: STRING_OPERATORS,
@@ -887,14 +724,12 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
       plane: "FAST",
       model: "VariantInventoryLocation",
       field: "locationName",
-      relationPath: "inventoryLocations",
+      relationPath: "inventoryByLoc",
       multiValue: true,
       multiValueStrategy: "relation_some",
+      indexHint: "idx_variant_inventory_location_name",
     },
-    ui: {
-      widget: "text",
-      placeholder: "Location name",
-    },
+    ui: { widget: "text" },
   }),
 
   "variant.cost": defineFilter({
@@ -909,9 +744,7 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
       field: "cost",
       relationPath: "variants",
     },
-    ui: {
-      widget: "number",
-    },
+    ui: { widget: "number" },
   }),
 
   "variant.countryOfOrigin": defineFilter({
@@ -926,10 +759,7 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
       field: "countryOfOrigin",
       relationPath: "variants",
     },
-    ui: {
-      widget: "text",
-      placeholder: "ISO country name/code",
-    },
+    ui: { widget: "text" },
   }),
 
   "variant.hsTariffCode": defineFilter({
@@ -944,14 +774,12 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
       field: "hsTariffCode",
       relationPath: "variants",
     },
-    ui: {
-      widget: "text",
-    },
+    ui: { widget: "text" },
   }),
 
   "variant.inventoryPolicy": defineFilter({
     key: "variant.inventoryPolicy",
-    label: "Inventory Out of Stock Policy",
+    label: "Inventory Policy",
     scope: "variant",
     valueKind: "enum",
     operators: ENUM_OPERATORS,
@@ -965,9 +793,7 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
       field: "inventoryPolicy",
       relationPath: "variants",
     },
-    ui: {
-      widget: "select",
-    },
+    ui: { widget: "select" },
   }),
 
   "variant.option1Value": defineFilter({
@@ -979,12 +805,10 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
     db: {
       plane: "FAST",
       model: "VariantLite",
-      field: "option1",
+      field: "option1Value",
       relationPath: "variants",
     },
-    ui: {
-      widget: "text",
-    },
+    ui: { widget: "text" },
   }),
 
   "variant.option2Value": defineFilter({
@@ -996,12 +820,10 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
     db: {
       plane: "FAST",
       model: "VariantLite",
-      field: "option2",
+      field: "option2Value",
       relationPath: "variants",
     },
-    ui: {
-      widget: "text",
-    },
+    ui: { widget: "text" },
   }),
 
   "variant.option3Value": defineFilter({
@@ -1013,17 +835,15 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
     db: {
       plane: "FAST",
       model: "VariantLite",
-      field: "option3",
+      field: "option3Value",
       relationPath: "variants",
     },
-    ui: {
-      widget: "text",
-    },
+    ui: { widget: "text" },
   }),
 
   "variant.physicalProduct": defineFilter({
     key: "variant.physicalProduct",
-    label: "Physical Product",
+    label: "Requires Shipping",
     scope: "variant",
     valueKind: "boolean",
     operators: BOOLEAN_OPERATORS,
@@ -1032,10 +852,9 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
       model: "VariantLite",
       field: "requiresShipping",
       relationPath: "variants",
+      indexHint: "idx_variant_lite_requires_shipping",
     },
-    ui: {
-      widget: "boolean-toggle",
-    },
+    ui: { widget: "boolean-toggle" },
   }),
 
   "variant.price": defineFilter({
@@ -1050,9 +869,7 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
       field: "price",
       relationPath: "variants",
     },
-    ui: {
-      widget: "number",
-    },
+    ui: { widget: "number" },
   }),
 
   "variant.profitMargin": defineFilter({
@@ -1067,12 +884,9 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
       field: "profitMargin",
       relationPath: "variants",
       computed: true,
-      sqlExpression:
-        "(CASE WHEN price IS NULL OR price = 0 THEN NULL ELSE (price - cost) / price * 100 END)",
+      indexHint: "idx_variant_lite_profit_margin",
     },
-    ui: {
-      widget: "number",
-    },
+    ui: { widget: "number" },
   }),
 
   "variant.sku": defineFilter({
@@ -1086,12 +900,9 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
       model: "VariantLite",
       field: "sku",
       relationPath: "variants",
-      indexHint: "idx_variant_lite_sku_trgm", // suggest trigram/GIN for CONTAINS
+      indexHint: "idx_variant_lite_sku_trgm",
     },
-    ui: {
-      widget: "text",
-      placeholder: "SKU contains…",
-    },
+    ui: { widget: "text" },
   }),
 
   "variant.trackQuantity": defineFilter({
@@ -1106,26 +917,23 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
       field: "trackQuantity",
       relationPath: "variants",
     },
-    ui: {
-      widget: "boolean-toggle",
-    },
+    ui: { widget: "boolean-toggle" },
   }),
 
   "variant.inventoryQuantity": defineFilter({
     key: "variant.inventoryQuantity",
-    label: "Variant Inventory Quantity",
+    label: "Inventory Quantity",
     scope: "variant",
     valueKind: "number",
     operators: NUMBER_OPERATORS,
     db: {
       plane: "FAST",
       model: "VariantLite",
-      field: "inventoryQuantity",
+      field: "inventoryQty",
       relationPath: "variants",
+      indexHint: "idx_variant_lite_inventory_qty",
     },
-    ui: {
-      widget: "number",
-    },
+    ui: { widget: "number" },
   }),
 
   "variant.title": defineFilter({
@@ -1140,9 +948,7 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
       field: "title",
       relationPath: "variants",
     },
-    ui: {
-      widget: "text",
-    },
+    ui: { widget: "text" },
   }),
 
   "variant.weight": defineFilter({
@@ -1154,12 +960,11 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
     db: {
       plane: "FAST",
       model: "VariantLite",
-      field: "weight",
+      field: "weightGrams",
       relationPath: "variants",
+      indexHint: "idx_variant_lite_weight_grams",
     },
-    ui: {
-      widget: "number",
-    },
+    ui: { widget: "number" },
   }),
 
   "variant.weightUnit": defineFilter({
@@ -1180,15 +985,14 @@ export const FILTER_REGISTRY: Record<FilterKey, FilterDefinition> = {
       field: "weightUnit",
       relationPath: "variants",
     },
-    ui: {
-      widget: "select",
-    },
+    ui: { widget: "select" },
   }),
 };
 
-/**
- * Convenience helpers for planner / generator.
- */
+// ---------------------------------------------------------
+// Convenience helpers
+// ---------------------------------------------------------
+
 export const ALL_FILTER_KEYS = Object.keys(
   FILTER_REGISTRY,
 ) as FilterKey[];
@@ -1200,3 +1004,68 @@ export const FAST_FILTER_KEYS = ALL_FILTER_KEYS.filter(
 export const SNAPSHOT_FILTER_KEYS = ALL_FILTER_KEYS.filter(
   (key) => FILTER_REGISTRY[key].db.plane === "SNAPSHOT",
 );
+
+// ---------------------------------------------------------
+// Runtime invariants (fail-fast if registry is misconfigured)
+// ---------------------------------------------------------
+
+function assert(condition: unknown, message: string): asserts condition {
+  if (!condition) {
+    throw new Error(`[FILTER_REGISTRY] ${message}`);
+  }
+}
+
+function validateRegistry() {
+  for (const key of ALL_FILTER_KEYS) {
+    const def = FILTER_REGISTRY[key];
+
+    // 1) Scope vs key prefix
+    if (def.scope === "product") {
+      assert(
+        key.startsWith("product."),
+        `Filter "${key}" has scope "product" but key does not start with "product."`,
+      );
+    } else if (def.scope === "variant") {
+      assert(
+        key.startsWith("variant."),
+        `Filter "${key}" has scope "variant" but key does not start with "variant."`,
+      );
+    }
+
+    // 2) FTS filters: only TEXT_FTS_OPERATORS
+    if (def.fullText) {
+      for (const op of def.operators) {
+        assert(
+          TEXT_FTS_OPERATORS.includes(op),
+          `Filter "${key}" is FTS-backed but uses unsupported operator "${op}".`,
+        );
+      }
+    }
+
+    // 3) multiValue fields must define a strategy
+    if (def.db.multiValue) {
+      assert(
+        !!def.db.multiValueStrategy,
+        `Filter "${key}" has multiValue=true but no multiValueStrategy.`,
+      );
+    }
+
+    // 4) relation_some must have relationPath
+    if (def.db.multiValueStrategy === "relation_some") {
+      assert(
+        !!def.db.relationPath,
+        `Filter "${key}" uses multiValueStrategy="relation_some" but has no relationPath.`,
+      );
+    }
+
+    // 5) SNAPSHOT-plane filters must require snapshotRunId
+    if (def.db.plane === "SNAPSHOT") {
+      assert(
+        def.db.requiresSnapshotRunId === true,
+        `Snapshot filter "${key}" must set db.requiresSnapshotRunId=true to avoid cross-run scans.`,
+      );
+    }
+  }
+}
+
+validateRegistry();

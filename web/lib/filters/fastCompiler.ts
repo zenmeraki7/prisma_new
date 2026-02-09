@@ -1,512 +1,274 @@
 // FILE: web/lib/filters/fastCompiler.ts
 
 import type { Prisma } from "@prisma/client";
-import type { FilterExpr, FilterLeafExpr, FilterLeafOp } from "./dsl";
-import type {
-  FilterRegistry,
-  FilterDefinition,
-  FilterValueKind,
+import type { FilterExpr, FilterFieldExpr, GroupOp, Operator } from "./dsl";
+import {
+  FILTER_REGISTRY,
+  type FilterDefinition,
+  type FilterKey,
+  type FilterOperator,
 } from "./registry";
-import { getFilterDef } from "./registry";
 
-type ProductWhere = Prisma.ProductLiteWhereInput;
+// We use "any" for the WhereInput types internally because we are building
+// dynamic objects based on the Registry. Type safety is ensured by the
+// Registry's strict typing of Model/Field pairs.
+type AnyWhere = Record<string, any>;
+
+export interface FastCompilerContext {
+  shopId: string;
+}
 
 /**
- * Compile a FilterExpr into a Prisma ProductLiteWhereInput for FAST plane.
- * Throws if any leaf is not plane=FAST.
+ * Compile a FilterExpr into a Prisma ProductLiteWhereInput.
+ *
+ * ASSUMPTIONS (enforced by astFromJson):
+ * - leaf.key is a valid FilterKey present in FILTER_REGISTRY
+ * - leaf.op is a canonical Operator ("EQ", "IN", "BETWEEN", ...)
+ * - leaf.value is already normalized by valueKind/operator:
+ *   - IN/NOT_IN → arrays
+ *   - BETWEEN → [min, max] with correct type
+ *   - date → Date or Date[]
+ *   - boolean → boolean or boolean[]
  */
 export function compileFastWhere(
   expr: FilterExpr | null | undefined,
-  registry: FilterRegistry,
-): ProductWhere {
-  if (!expr) return {};
-  return compileExpr(expr, registry);
+  ctx: FastCompilerContext,
+): Prisma.ProductLiteWhereInput {
+  const base: AnyWhere = { shopId: ctx.shopId };
+
+  if (!expr) return base;
+
+  const compiled = compileNode(expr);
+
+  if (isEmptyWhere(compiled)) {
+    return base;
+  }
+
+  return {
+    AND: [base, compiled],
+  };
 }
 
-/* =======================================================================
- * Internal – expression dispatcher
- * ==================================================================== */
+/* ======================================================================= */
+/* Internal – expression dispatcher                                        */
+/* ======================================================================= */
 
-function compileExpr(expr: FilterExpr, registry: FilterRegistry): ProductWhere {
-  if (expr.type === "group") {
-    return compileGroup(expr, registry);
+function compileNode(expr: FilterExpr): AnyWhere {
+  if (expr.kind === "group") {
+    return compileGroup(expr);
   }
-  return compileLeaf(expr, registry);
+  return compileField(expr);
 }
 
 function compileGroup(
-  group: Extract<FilterExpr, { type: "group" }>,
-  registry: FilterRegistry,
-): ProductWhere {
+  group: { kind: "group"; op: GroupOp; children: FilterExpr[] },
+): AnyWhere {
   const { op, children } = group;
 
-  if (!children || children.length === 0) {
-    // Empty group – treat as no-op
-    return {};
-  }
+  if (!children || children.length === 0) return {};
 
-  if (op === "not") {
+  if (op === "NOT") {
     if (children.length !== 1) {
       throw new Error(`FAST compiler: NOT group must have exactly 1 child.`);
     }
-    const childWhere = compileExpr(children[0], registry);
+    const childWhere = compileNode(children[0]);
+    if (isEmptyWhere(childWhere)) return {};
     return { NOT: childWhere };
   }
 
-  const compiledChildren = children.map((child) =>
-    compileExpr(child, registry),
-  );
+  const compiledChildren = children
+    .map(compileNode)
+    .filter((w) => !isEmptyWhere(w));
 
-  if (op === "and") {
-    return { AND: compiledChildren };
-  }
-  if (op === "or") {
-    return { OR: compiledChildren };
-  }
+  if (compiledChildren.length === 0) return {};
 
-  throw new Error(`FAST compiler: Unknown group op: ${op}`);
+  if (op === "AND") return { AND: compiledChildren };
+  if (op === "OR") return { OR: compiledChildren };
+
+  throw new Error(`FAST compiler: unknown group op "${op}".`);
 }
 
-/* =======================================================================
- * Internal – leaf handling
- * ==================================================================== */
+/* ======================================================================= */
+/* Internal – leaf handling                                                */
+/* ======================================================================= */
 
-function compileLeaf(
-  leaf: FilterLeafExpr,
-  registry: FilterRegistry,
-): ProductWhere {
-  const def = getFilterDef(leaf.filterId);
+function compileField(leaf: FilterFieldExpr): AnyWhere {
+  const def = getFilterDefinition(leaf.key);
 
-  if (def.plane !== "FAST") {
+  if (def.db.plane !== "FAST") {
+    throw new Error(`FAST compiler: filter "${leaf.key}" is not FAST plane.`);
+  }
+
+  // Double-safety check; astFromJson already enforced this.
+  if (!def.operators.includes(leaf.op as FilterOperator)) {
     throw new Error(
-      `FAST compiler: filterId "${def.id}" is plane=${def.plane}, cannot compile into FAST plane.`,
+      `FAST compiler: operator "${leaf.op}" not allowed for "${leaf.key}".`,
     );
   }
 
-  if (!def.fastField) {
+  // IMPORTANT: value is already normalized by astFromJson based on valueKind + op
+  const value = leaf.value;
+  const { model, field, relationPath, multiValue, multiValueStrategy } = def.db;
+
+  // ---------------------------------------------------------
+  // STRATEGY 1: Array Overlap (Postgres Native Arrays)
+  // e.g. ProductLite.tags
+  // ---------------------------------------------------------
+  if (multiValue && multiValueStrategy === "array_overlap") {
+    return buildArrayOverlapWhere(field, leaf.op, value);
+  }
+
+  // ---------------------------------------------------------
+  // STRATEGY 2: Relation Join (some / exists)
+  // e.g. ProductLite -> collections, or VariantLite -> inventoryByLoc
+  // ---------------------------------------------------------
+  if (multiValue && multiValueStrategy === "relation_some") {
+    const inner = buildScalarWhereInner(field, leaf.op, value);
+
+    if (relationPath) {
+      // e.g. collections: { some: { collectionTitle: { in: [...] } } }
+      return nestRelation(relationPath, { some: inner });
+    }
     throw new Error(
-      `FAST compiler: filterId "${def.id}" has plane=FAST but missing fastField descriptor.`,
+      `FAST compiler: relation_some requires relationPath for filter "${leaf.key}".`,
     );
   }
 
-  if (!def.operators.includes(leaf.op)) {
-    throw new Error(
-      `FAST compiler: operator "${leaf.op}" not allowed for filterId "${def.id}".`,
-    );
-  }
+  // ---------------------------------------------------------
+  // STRATEGY 3: Standard Scalar (1:1 or Direct)
+  // ---------------------------------------------------------
 
-  // Validate & normalize value according to valueKind
-  const value = normalizeValue(def.valueKind, leaf.op, leaf.value);
+  // Build the scalar check: { price: { gt: 100 } }
+  let where = buildScalarWhereInner(field, leaf.op, value);
 
-  switch (def.fastField.model) {
-    case "ProductLite":
-      return compileProductLiteField(def, leaf.op, value);
-    case "ProductTag":
-      return compileProductTagField(def, leaf.op, value);
-    case "ProductCollection":
-      return compileProductCollectionField(def, leaf.op, value);
-    case "VariantRollup":
-      return compileVariantRollupField(def, leaf.op, value);
-    default:
-      throw new Error(
-        `FAST compiler: Unsupported fastField model "${def.fastField.model}" for filterId "${def.id}".`,
-      );
-  }
-}
-
-/* =======================================================================
- * Value normalization / validation
- * ==================================================================== */
-
-function normalizeValue(
-  kind: FilterValueKind,
-  op: FilterLeafOp,
-  raw: unknown,
-): unknown {
-  // Unary ops do not require a value
-  if (op === "is_set" || op === "is_not_set") {
-    return undefined;
-  }
-
-  if (raw === undefined || raw === null) {
-    throw new Error(
-      `FAST compiler: value is required for operator "${op}" (valueKind=${kind}).`,
-    );
-  }
-
-  switch (kind) {
-    case "string":
-      if (typeof raw !== "string") {
-        throw new Error(
-          `FAST compiler: expected string value, got ${typeof raw}.`,
-        );
-      }
-      return raw;
-
-    case "stringList":
-      if (Array.isArray(raw)) {
-        const allStrings = raw.every((v) => typeof v === "string");
-        if (!allStrings) {
-          throw new Error(
-            `FAST compiler: expected string[] for stringList filter, got non-string element.`,
-          );
-        }
-        return raw;
-      }
-      if (typeof raw === "string") return [raw];
-      throw new Error(
-        `FAST compiler: expected string|string[] for stringList filter, got ${typeof raw}.`,
-      );
-
-    case "number":
-    case "int": {
-      if (op === "between") {
-        const [from, to] = normalizeBetweenNumeric(raw);
-        return [from, to];
-      }
-      const num = Number(raw);
-      if (!Number.isFinite(num)) {
-        throw new Error(
-          `FAST compiler: expected numeric value for ${kind}, got ${String(
-            raw,
-          )}.`,
-        );
-      }
-      if (kind === "int" && !Number.isInteger(num)) {
-        throw new Error(
-          `FAST compiler: expected integer value, got ${num}.`,
-        );
-      }
-      return num;
-    }
-
-    case "boolean":
-      if (typeof raw !== "boolean") {
-        throw new Error(
-          `FAST compiler: expected boolean value, got ${typeof raw}.`,
-        );
-      }
-      return raw;
-
-    case "datetime": {
-      if (op === "between") {
-        const [from, to] = normalizeBetweenDate(raw);
-        return [from, to];
-      }
-
-      const d =
-        raw instanceof Date
-          ? raw
-          : typeof raw === "string"
-          ? new Date(raw)
-          : null;
-      if (!d || Number.isNaN(d.getTime())) {
-        throw new Error(
-          `FAST compiler: expected datetime (string or Date), got: ${String(
-            raw,
-          )}.`,
-        );
-      }
-      return d;
-    }
-
-    case "id":
-      if (Array.isArray(raw)) {
-        const ids = raw.map((v) => {
-          if (typeof v !== "string") {
-            throw new Error(
-              `FAST compiler: id list must be string[], got non-string element.`,
-            );
-          }
-          return v;
-        });
-        return ids;
-      }
-      if (typeof raw === "string") return raw;
-      throw new Error(
-        `FAST compiler: expected string|string[] for id valueKind, got ${typeof raw}.`,
-      );
-
-    // FAST plane should not see metafield/fulltext, but guard anyway.
-    case "metafield":
-    case "fulltext":
-      throw new Error(
-        `FAST compiler: valueKind "${kind}" should not be compiled in FAST plane.`,
-      );
-
-    default: {
-      // Exhaustive guard
-      const _never: never = kind;
-      throw new Error(
-        `FAST compiler: unsupported valueKind "${String(_never)}".`,
-      );
+  // If this field lives on a related model (Rollup, Content, Variants), nest it.
+  if (relationPath) {
+    if (model === "VariantRollup" || model === "ProductContent") {
+      // 1:1 relation from ProductLite
+      where = { [relationPath]: where };
+    } else if (model === "VariantLite") {
+      // ProductLite -> variants (1:N)
+      where = { [relationPath]: { some: where } };
+    } else if (def.scope === "variant" && model === "VariantInventoryLocation") {
+      // ProductLite -> variants (some) -> inventoryByLoc (some)
+      // registry: relationPath = "inventoryByLoc"
+      const invWhere = { [relationPath]: { some: where } };
+      where = { variants: { some: invWhere } };
     }
   }
+
+  return where;
 }
 
-function normalizeBetweenNumeric(raw: unknown): [number, number] {
-  if (Array.isArray(raw) && raw.length === 2) {
-    const [a, b] = raw;
-    const n1 = Number(a);
-    const n2 = Number(b);
-    if (!Number.isFinite(n1) || !Number.isFinite(n2)) {
-      throw new Error(
-        `FAST compiler: "between" for numeric must be [number, number].`,
-      );
-    }
-    return n1 <= n2 ? [n1, n2] : [n2, n1];
-  }
-  if (typeof raw === "object" && raw !== null && "min" in raw && "max" in raw) {
-    const anyRaw = raw as { min: unknown; max: unknown };
-    const n1 = Number(anyRaw.min);
-    const n2 = Number(anyRaw.max);
-    if (!Number.isFinite(n1) || !Number.isFinite(n2)) {
-      throw new Error(
-        `FAST compiler: "between" for numeric must be { min, max } with numeric values.`,
-      );
-    }
-    return n1 <= n2 ? [n1, n2] : [n2, n1];
-  }
-  throw new Error(
-    `FAST compiler: "between" for numeric expects [min,max] or {min,max}.`,
-  );
+// Helper to nest relations dynamically
+function nestRelation(path: string, inner: AnyWhere): AnyWhere {
+  return { [path]: inner };
 }
 
-function normalizeBetweenDate(raw: unknown): [Date, Date] {
-  if (Array.isArray(raw) && raw.length === 2) {
-    const [a, b] = raw;
-    const d1 = toDate(a);
-    const d2 = toDate(b);
-    return d1 <= d2 ? [d1, d2] : [d2, d1];
-  }
-  if (typeof raw === "object" && raw !== null && "from" in raw && "to" in raw) {
-    const anyRaw = raw as { from: unknown; to: unknown };
-    const d1 = toDate(anyRaw.from);
-    const d2 = toDate(anyRaw.to);
-    return d1 <= d2 ? [d1, d2] : [d2, d1];
-  }
-  throw new Error(
-    `FAST compiler: "between" for datetime expects [from,to] or {from,to}.`,
-  );
-}
+/* ======================================================================= */
+/* Scalar Logic                                                            */
+/* ======================================================================= */
 
-function toDate(value: unknown): Date {
-  if (value instanceof Date) return value;
-  if (typeof value === "string") {
-    const d = new Date(value);
-    if (!Number.isNaN(d.getTime())) return d;
-  }
-  throw new Error(
-    `FAST compiler: invalid datetime value in "between": ${String(value)}.`,
-  );
-}
-
-/* =======================================================================
- * Model-specific compilers
- * ==================================================================== */
-
-function compileProductLiteField(
-  def: FilterDefinition,
-  op: FilterLeafOp,
+function buildScalarWhereInner(
+  field: string,
+  op: Operator,
   value: unknown,
-): ProductWhere {
-  const field = def.fastField!.field as keyof Prisma.ProductLiteWhereInput;
-
+): AnyWhere {
   switch (op) {
-    case "eq":
-      return { [field]: value } as ProductWhere;
-    case "neq":
-      return { NOT: { [field]: value } } as ProductWhere;
+    case "EQ":
+      return { [field]: value };
+    case "NEQ":
+      return { NOT: { [field]: value } };
 
-    case "in":
-      return { [field]: { in: asArray(value) } } as ProductWhere;
-    case "not_in":
-      return { [field]: { notIn: asArray(value) } } as ProductWhere;
+    case "IN":
+      return { [field]: { in: asArray(value) } };
+    case "NOT_IN":
+      return { [field]: { notIn: asArray(value) } };
 
-    case "contains":
+    case "CONTAINS":
       return {
         [field]: { contains: value as string, mode: "insensitive" },
-      } as ProductWhere;
-    case "not_contains":
+      };
+    case "NOT_CONTAINS":
       return {
         NOT: {
           [field]: { contains: value as string, mode: "insensitive" },
         },
-      } as ProductWhere;
+      };
 
-    case "starts_with":
+    case "STARTS_WITH":
       return {
         [field]: { startsWith: value as string, mode: "insensitive" },
-      } as ProductWhere;
-    case "ends_with":
+      };
+    case "ENDS_WITH":
       return {
         [field]: { endsWith: value as string, mode: "insensitive" },
-      } as ProductWhere;
+      };
 
-    case "gt":
-      return { [field]: { gt: value } } as ProductWhere;
-    case "gte":
-      return { [field]: { gte: value } } as ProductWhere;
-    case "lt":
-      return { [field]: { lt: value } } as ProductWhere;
-    case "lte":
-      return { [field]: { lte: value } } as ProductWhere;
+    case "GT":
+      return { [field]: { gt: value } };
+    case "GTE":
+      return { [field]: { gte: value } };
+    case "LT":
+      return { [field]: { lt: value } };
+    case "LTE":
+      return { [field]: { lte: value } };
 
-    case "between": {
+    case "BETWEEN": {
       const [from, to] = value as [unknown, unknown];
-      return { [field]: { gte: from, lte: to } } as ProductWhere;
+      return { [field]: { gte: from, lte: to } };
     }
 
-    case "is_set":
-      return { NOT: { [field]: null } } as ProductWhere;
-    case "is_not_set":
-      return { [field]: null } as ProductWhere;
+    case "IS_SET":
+      return { NOT: { [field]: null } };
+    case "IS_NOT_SET":
+      return { [field]: null };
 
     default:
-      throw new Error(
-        `FAST compiler: unsupported op "${op}" for ProductLite field "${field}".`,
-      );
+      throw new Error(`FAST compiler: unknown op "${op}".`);
   }
 }
 
-/**
- * Tags live in ProductTag join table.
- *
- * product.tags:
- *  - contains / in: at least one tag in the provided list(s)
- *  - not_contains / not_in: no tag in the provided list(s)
- */
-function compileProductTagField(
-  def: FilterDefinition,
-  op: FilterLeafOp,
+function buildArrayOverlapWhere(
+  field: string,
+  op: Operator,
   value: unknown,
-): ProductWhere {
-  const values = asArray(value).map((v) => String(v));
-
-  // We don't rely on the TS type here because some generated clients
-  // (older schema) may not yet expose `tagsJoin` on ProductLiteWhereInput.
-  const relation = {
-    some: { tag: { in: values } },
-  };
-  const noneRelation = {
-    none: { tag: { in: values } },
-  };
-
+): AnyWhere {
+  const values = asArray(value).map(String);
   switch (op) {
-    case "contains":
-    case "in":
-      return { tagsJoin: relation } as ProductWhere;
-    case "not_contains":
-    case "not_in":
-      return { tagsJoin: noneRelation } as ProductWhere;
+    case "EQ":
+    case "IN":
+      return { [field]: { hasSome: values } };
+    case "NEQ":
+    case "NOT_IN":
+      return { NOT: { [field]: { hasSome: values } } };
+    case "IS_SET":
+      return { [field]: { isEmpty: false } };
+    case "IS_NOT_SET":
+      return { [field]: { isEmpty: true } };
     default:
       throw new Error(
-        `FAST compiler: unsupported op "${op}" for ProductTag-based filter "${def.id}".`,
+        `FAST compiler: array op "${op}" not supported for field "${field}".`,
       );
   }
 }
 
-/**
- * Collections live in ProductCollection join table.
- */
-function compileProductCollectionField(
-  def: FilterDefinition,
-  op: FilterLeafOp,
-  value: unknown,
-): ProductWhere {
-  const values = asArray(value).map((v) => String(v));
-  const relation: Prisma.ProductLiteWhereInput["collections"] = {
-    some: { collectionId: { in: values } },
-  };
-  const noneRelation: Prisma.ProductLiteWhereInput["collections"] = {
-    none: { collectionId: { in: values } },
-  };
-
-  switch (op) {
-    case "in":
-      return { collections: relation };
-    case "not_in":
-      return { collections: noneRelation };
-    default:
-      throw new Error(
-        `FAST compiler: unsupported op "${op}" for ProductCollection-based filter "${def.id}".`,
-      );
-  }
-}
-
-/**
- * VariantRollup is a 1-1 relation from ProductLite used for numeric aggregations
- * like totalInventory, minPrice, maxPrice, etc.
- */
-function compileVariantRollupField(
-  def: FilterDefinition,
-  op: FilterLeafOp,
-  value: unknown,
-): ProductWhere {
-  const field =
-    def.fastField!.field as keyof Prisma.VariantRollupWhereInput;
-
-  const make = (inner: Prisma.VariantRollupWhereInput): ProductWhere => ({
-    variantRollup: inner,
-  });
-
-  switch (op) {
-    case "eq":
-      return make({ [field]: value } as Prisma.VariantRollupWhereInput);
-    case "neq":
-      return make({
-        NOT: { [field]: value } as Prisma.VariantRollupWhereInput,
-      });
-
-    case "in":
-      return make({
-        [field]: { in: asArray(value) },
-      } as Prisma.VariantRollupWhereInput);
-    case "not_in":
-      return make({
-        [field]: { notIn: asArray(value) },
-      } as Prisma.VariantRollupWhereInput);
-
-    case "gt":
-      return make({ [field]: { gt: value } } as Prisma.VariantRollupWhereInput);
-    case "gte":
-      return make({
-        [field]: { gte: value },
-      } as Prisma.VariantRollupWhereInput);
-    case "lt":
-      return make({ [field]: { lt: value } } as Prisma.VariantRollupWhereInput);
-    case "lte":
-      return make({
-        [field]: { lte: value },
-      } as Prisma.VariantRollupWhereInput);
-
-    case "between": {
-      const [from, to] = value as [unknown, unknown];
-      return make({
-        [field]: { gte: from, lte: to },
-      } as Prisma.VariantRollupWhereInput);
-    }
-
-    case "is_set":
-      return make({
-        [field]: { not: null },
-      } as Prisma.VariantRollupWhereInput);
-    case "is_not_set":
-      return make({
-        [field]: null,
-      } as Prisma.VariantRollupWhereInput);
-
-    default:
-      throw new Error(
-        `FAST compiler: unsupported op "${op}" for VariantRollup-based filter "${def.id}".`,
-      );
-  }
-}
-
-/* =======================================================================
- * Helpers
- * ==================================================================== */
+/* ======================================================================= */
+/* Helpers                                                                 */
+/* ======================================================================= */
 
 function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [value];
+}
+
+function isEmptyWhere(w: AnyWhere): boolean {
+  return Object.keys(w).length === 0;
+}
+
+function getFilterDefinition(key: FilterKey): FilterDefinition {
+  const def = FILTER_REGISTRY[key];
+  if (!def) {
+    throw new Error(`FAST compiler: Unknown filter: "${key}".`);
+  }
+  return def;
 }

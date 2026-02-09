@@ -1,14 +1,14 @@
-// web/graphql/schema.ts
+// FILE: web/graphql/schema.ts
+
 import { createSchema } from "graphql-yoga";
 import { prisma } from "../db/prisma.js";
 
 import { planFilterResolver } from "./filtering/planFilterResolver.js";
 import { productsByFilterResolver } from "./filtering/productsByFilterResolver.js";
 
-import {
-  snapshotStatusResolver,
-  productsBySnapshotResolver,
-} from "./snapshots/resolvers.js";
+import { snapshotStatusResolver } from "./snapshots/statusResolver";
+import { productsBySnapshotResolver } from "./snapshots/productsBySnapshotResolver";
+import { fastProductsResolvers } from "./resolvers/fastProducts";
 
 import {
   snapshotRunsResolver,
@@ -17,7 +17,7 @@ import {
 
 import { debugVerifySnapshotResolver } from "./debug/debugVerifySnapshotResolver.js";
 
-// Context type
+// Context type (used only for type hints in resolvers that take ctx)
 export type GraphQLContext = {
   shopId: string;
 };
@@ -30,7 +30,7 @@ const typeDefs = /* GraphQL */ `
   scalar DateTime
   scalar JSON
 
-  # --- FAST plane ---
+  # --- Core product types (FAST plane) ---
   type ProductLite {
     id: ID!
     title: String!
@@ -49,6 +49,7 @@ const typeDefs = /* GraphQL */ `
     totalInventory: Int
   }
 
+  # --- Bootstrap / legacy listing for ProductsPage ---
   type BootstrapStatus {
     fastReady: Boolean!
     fastLastSyncAt: DateTime
@@ -66,9 +67,12 @@ const typeDefs = /* GraphQL */ `
     page: ProductPage!
   }
 
+  # --- Filter execution / planner meta ---
   enum FilterExecutionMode {
+    AUTO
     FAST_ONLY
-    SNAPSHOT
+    SNAPSHOT_ONLY
+    HYBRID
   }
 
   input PlanFilterInput {
@@ -81,48 +85,66 @@ const typeDefs = /* GraphQL */ `
     filterSummary: String
   }
 
+  type FilterGuardrail {
+    candidateCount: Int!
+    candidateLimit: Int!
+    candidateLimitHit: Boolean!
+  }
+
+  # ProductsByFilter (single-pass: data + meta)
   input ProductsByFilterInput {
-    filter: JSON!
-    mode: FilterExecutionMode! = FAST_ONLY
+    filter: JSON
+    mode: FilterExecutionMode = AUTO
     first: Int! = 50
     after: String
-  }
-
-  type ProductsByFilterPage {
-    items: [ProductLite!]!
-    nextCursor: String
-    planHash: String
-  }
-
-  # --- Snapshot plane ---
-  enum SnapshotState {
-    PENDING
-    RUNNING
-    SUCCEEDED
-    FAILED
-    EXPIRED
-  }
-
-  type SnapshotStatus {
-    state: SnapshotState!
-    progress: Int!
-    total: Int!
-    errorMessage: String
-    filterSummary: String
-    planHash: String!
     snapshotRunId: ID
   }
 
-  type ProductsBySnapshotPage {
+  type ProductsByFilterPayload {
     items: [ProductLite!]!
     nextCursor: String
+    mode: FilterExecutionMode!
+    guardrail: FilterGuardrail!
+    warnings: [String!]!
+  }
+
+  # --- Snapshot plane types ---
+  enum SnapshotRunState {
+    QUEUED
+    RUNNING
+    SUCCEEDED
+    FAILED
+    CANCELLED
+  }
+
+  type SnapshotStatus {
+    id: ID!
+    state: SnapshotRunState!
+    progress: Int!
+    total: Int!
+    errorMessage: String
+    createdAt: DateTime!
+  }
+
+  input ProductsBySnapshotInput {
+    snapshotRunId: ID!
+    filter: JSON
+    first: Int = 50
+    after: String
+  }
+
+  type ProductsBySnapshotPayload {
+    items: [ProductLite!]!
+    nextCursor: String
+    mode: FilterExecutionMode!
+    guardrail: FilterGuardrail!
     snapshotRunId: ID!
   }
 
   type SnapshotRun {
     id: ID!
     planHash: String!
-    state: SnapshotState!
+    state: SnapshotRunState!
     progress: Int!
     total: Int!
     errorMessage: String
@@ -159,6 +181,7 @@ const typeDefs = /* GraphQL */ `
     pageInfo: PageInfo!
   }
 
+  # --- Shared pagination type ---
   type PageInfo {
     hasNextPage: Boolean!
     endCursor: String
@@ -170,6 +193,37 @@ const typeDefs = /* GraphQL */ `
     mismatchedProductIds: [ID!]
   }
 
+  # --- FAST products connection (for fastProductsResolver) ---
+  enum FastProductsSortField {
+    TITLE
+    CREATED_AT
+    UPDATED_AT
+    PUBLISHED_AT
+    TOTAL_INVENTORY
+    VARIANT_COUNT
+  }
+
+  enum SortDirection {
+    ASC
+    DESC
+  }
+
+  input FastProductsSortInput {
+    field: FastProductsSortField!
+    direction: SortDirection!
+  }
+
+  type FastProductsEdge {
+    cursor: String!
+    node: ProductLite!
+  }
+
+  type FastProductsConnection {
+    edges: [FastProductsEdge!]!
+    pageInfo: PageInfo!
+  }
+
+  # --- Root Query ---
   type Query {
     """
     FAST-plane bootstrap listing for ProductsPage.
@@ -181,26 +235,66 @@ const typeDefs = /* GraphQL */ `
       search: String
     ): BootstrapProductsPayload!
 
+    """
+    Standalone planner call (dev / debug tooling).
+    Most merchants will not hit this; UI can rely on productsByFilter meta.
+    """
     planFilter(input: PlanFilterInput!): PlanFilterPayload!
-    productsByFilter(input: ProductsByFilterInput!): ProductsByFilterPage!
-    snapshotStatus(planHash: String!): SnapshotStatus!
-    productsBySnapshot(
-      planHash: String!
-      first: Int! = 50
+
+    """
+    Primary filtered listing endpoint (FAST + SNAPSHOT planner baked in).
+    Returns products + execution mode + guardrail + warnings in one round-trip.
+    """
+    productsByFilter(input: ProductsByFilterInput!): ProductsByFilterPayload!
+
+    """
+    FAST-only listing with simple filter JSON and sort.
+    Used by fastProductsResolvers.
+    """
+    fastProducts(
+      first: Int
       after: String
-    ): ProductsBySnapshotPage!
+      filter: JSON
+      sort: FastProductsSortInput
+    ): FastProductsConnection!
+
+    """
+    Snapshot status lookup by planHash or id.
+    At least one of planHash or id should be provided.
+    """
+    snapshotStatus(
+      planHash: String
+      id: ID
+    ): SnapshotStatus
+
+    """
+    Read products from a specific snapshot run (HYBRID/SNAPSHOT).
+    """
+    productsBySnapshot(input: ProductsBySnapshotInput!): ProductsBySnapshotPayload!
+
+    """
+    Snapshot run history (for debug / admin UI).
+    """
     snapshotRuns(first: Int! = 25, after: String): SnapshotRunConnection!
+
+    """
+    Events for a specific snapshot run.
+    """
     snapshotRunEvents(
       runId: ID!
       first: Int! = 50
       after: String
     ): SnapshotRunEventConnection!
+
+    """
+    Deep consistency check between FAST and SNAPSHOT planes.
+    """
     debugVerifySnapshot(planHash: String!): DebugVerifySnapshotPayload!
   }
 `;
 
 /* ==========================
-   Helpers for cursor
+   Helpers for bootstrap cursor
 ========================== */
 
 function encodeCursor(d: Date): string {
@@ -310,27 +404,27 @@ const resolvers = {
       };
     },
 
-    // Existing resolvers
+    // Planner + filter data resolvers
     planFilter: planFilterResolver,
     productsByFilter: productsByFilterResolver,
 
+    // Snapshot status + read-side
     snapshotStatus: snapshotStatusResolver,
     productsBySnapshot: productsBySnapshotResolver,
 
+    // Snapshot history
     snapshotRuns: snapshotRunsResolver,
     snapshotRunEvents: snapshotRunEventsResolver,
 
+    // Debug
     debugVerifySnapshot: debugVerifySnapshotResolver,
+
+    // FAST products connection (from fastProductsResolvers)
+    ...fastProductsResolvers.Query,
   },
 };
 
 export const schema = createSchema({
   typeDefs,
-  resolvers: {
-    Query: {
-      productsByFilter: productsByFilterResolver,
-      snapshotStatus: snapshotStatusResolver,
-      snapshotHistory: snapshotHistoryResolver,
-    },
-  },
+  resolvers,
 });

@@ -86,7 +86,9 @@ function parseDateInput(value) {
 }
 
 /**
- * Map your filter DSL (same shape used by productsByFilter) to a ProductLite where.
+ * Map your legacy filter DSL (same shape used by productsByFilter in this file)
+ * to a Prisma ProductLiteWhereInput.
+ *
  * Supports product + variant + rollup filters.
  *
  * @param {string} shopId
@@ -153,6 +155,7 @@ function buildProductWhereFromFilter(shopId, filterExpr) {
         where.updatedAtShopify = { gte: d };
       }
     } else if (filterId === "product.description" && op === "contains") {
+      // NOTE: Only valid if ProductLite has a description column
       where.description = {
         contains: String(value),
         mode: "insensitive",
@@ -207,11 +210,10 @@ function buildProductWhereFromFilter(shopId, filterExpr) {
         mode: "insensitive",
       };
     } else if (filterId === "product.tag" && op === "contains") {
-      // From normalized ProductTag join
-      where.tagsJoin = {
-        some: {
-          tag: { contains: String(value), mode: "insensitive" },
-        },
+      // ProductLite.tags is a TEXT[]; simple "has" check for exact tag match.
+      // (If you later want partial / case-insensitive, move back to a normalized join.)
+      where.tags = {
+        has: String(value),
       };
     } else if (filterId === "product.templateSuffix" && op === "contains") {
       where.templateSuffix = {
@@ -240,7 +242,6 @@ function buildProductWhereFromFilter(shopId, filterExpr) {
     }
 
     // ───────────────── VARIANT / ROLLUP FIELDS ─────────────────
-
     else if (filterId === "variant.barcode" && op === "contains") {
       where.variants = {
         some: {
@@ -546,9 +547,7 @@ app.post("/api/graphql", async (req, res) => {
   try {
     const session = res.locals.shopify?.session;
     if (!session) {
-      return res
-        .status(401)
-        .json({ errors: [{ message: "Unauthenticated" }] });
+      return res.status(401).json({ errors: [{ message: "Unauthenticated" }] });
     }
 
     const { query, variables } = req.body || {};
@@ -563,16 +562,11 @@ app.post("/api/graphql", async (req, res) => {
 
     // ───────────────── planFilter ─────────────────
     if (query.includes("planFilter")) {
-      const filter =
-        variables?.filter ??
-        variables?.input?.filter ??
-        null;
+      const filter = variables?.filter ?? variables?.input?.filter ?? null;
 
       const executionMode = "FAST_ONLY"; // currently no SNAPSHOT planner wiring
       const planHash = filter
-        ? Buffer.from(JSON.stringify(filter))
-            .toString("base64")
-            .slice(0, 16)
+        ? Buffer.from(JSON.stringify(filter)).toString("base64").slice(0, 16)
         : "default";
 
       const filterSummary = filter
@@ -615,6 +609,9 @@ app.post("/api/graphql", async (req, res) => {
                   }
                 }
               }
+            }
+            pageInfo {
+              hasNextPage
             }
           }
         }
@@ -756,10 +753,8 @@ app.post("/api/graphql", async (req, res) => {
               .filter((n) => n != null);
 
             const hasPrice = priceNumbers.length > 0;
-            const minPriceRaw =
-              hasPrice ? Math.min(...priceNumbers) : null;
-            const maxPriceRaw =
-              hasPrice ? Math.max(...priceNumbers) : null;
+            const minPriceRaw = hasPrice ? Math.min(...priceNumbers) : null;
+            const maxPriceRaw = hasPrice ? Math.max(...priceNumbers) : null;
 
             // For VariantRollup (non-nullable Decimal fields),
             // fall back to 0 if we don't have any prices.
@@ -935,6 +930,12 @@ app.post("/api/graphql", async (req, res) => {
                 items: [],
                 nextCursor: null,
                 mode: "FAST_ONLY",
+                guardrail: {
+                  candidateCount: 0,
+                  candidateLimit: 50000,
+                  candidateLimitHit: false,
+                },
+                warnings: [],
               },
             },
           });
@@ -942,10 +943,7 @@ app.post("/api/graphql", async (req, res) => {
 
         const where = buildProductWhereFromFilter(shop.id, filterExpr);
 
-        console.log(
-          `🔎 Prisma where clause:`,
-          JSON.stringify(where, null, 2),
-        );
+        console.log(`🔎 Prisma where clause:`, JSON.stringify(where, null, 2));
 
         const offset = after ? parseInt(after, 10) : 0;
 
@@ -954,29 +952,34 @@ app.post("/api/graphql", async (req, res) => {
           orderBy: { updatedAtShopify: "desc" },
           take: first,
           skip: offset,
-          include: {
-            tagsJoin: true,
-          },
+          // NOTE: no include here; tags are stored directly on ProductLite.tags[]
         });
 
-        console.log(
-          `📦 Found ${items.length} products matching filters`,
-        );
+        console.log(`📦 Found ${items.length} products matching filters`);
 
         const transformedItems = items.map((item) => ({
-          id: item.productId, // Shopify GID for frontend
+          id: item.productId,
           title: item.title,
           handle: item.handle,
           status: item.status,
           vendor: item.vendor,
           productType: item.productType,
-          tags: (item.tagsJoin || []).map((t) => t.tag),
+          tags: item.tags || [],
           hasImages: item.hasImages,
           updatedAtShopify: item.updatedAtShopify,
+          totalInventory: item.totalInventory ?? null,
+          variantCount: item.variantCount ?? null,
         }));
 
         const nextCursor =
           items.length === first ? String(offset + items.length) : null;
+
+        // Simple guardrail stub so frontend has shape
+        const guardrail = {
+          candidateCount: transformedItems.length,
+          candidateLimit: 50000,
+          candidateLimitHit: false,
+        };
 
         return res.json({
           data: {
@@ -984,6 +987,8 @@ app.post("/api/graphql", async (req, res) => {
               items: transformedItems,
               nextCursor,
               mode: "FAST_ONLY",
+              guardrail,
+              warnings: [],
             },
           },
         });
@@ -1178,7 +1183,7 @@ app.post("/api/graphql", async (req, res) => {
           shopId: shop.id,
           productId: { in: productIds }, // Shopify GIDs
         },
-        include: { tagsJoin: true },
+        // tags now live directly on ProductLite.tags[]
       });
 
       const items = products.map((item) => ({
@@ -1188,13 +1193,15 @@ app.post("/api/graphql", async (req, res) => {
         status: item.status,
         vendor: item.vendor,
         productType: item.productType,
-        tags: (item.tagsJoin || []).map((t) => t.tag),
+        tags: item.tags || [],
         hasImages: item.hasImages,
         updatedAtShopify: item.updatedAtShopify,
       }));
 
       const nextCursor =
-        memberships.length === first ? String(offset + memberships.length) : null;
+        memberships.length === first
+          ? String(offset + memberships.length)
+          : null;
 
       return res.json({
         data: {
@@ -1283,9 +1290,7 @@ app.get("/api/products/count", async (_req, res) => {
     const client = new shopify.api.clients.Graphql({
       session: res.locals.shopify.session,
     });
-    const result = await client.request(
-      `query { productsCount { count } }`,
-    );
+    const result = await client.request(`query { productsCount { count } }`);
     res.status(200).send({ count: result.data.productsCount.count });
   } catch (err) {
     console.error("❌ Count error:", err);
@@ -1320,10 +1325,7 @@ app.use("/*", shopify.ensureInstalledOnShop(), async (_req, res) => {
     .send(
       readFileSync(join(STATIC_PATH, "index.html"))
         .toString()
-        .replace(
-          "%VITE_SHOPIFY_API_KEY%",
-          process.env.SHOPIFY_API_KEY || "",
-        ),
+        .replace("%VITE_SHOPIFY_API_KEY%", process.env.SHOPIFY_API_KEY || ""),
     );
 });
 

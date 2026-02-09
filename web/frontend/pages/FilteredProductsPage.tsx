@@ -1,4 +1,5 @@
-// web/frontend/pages/FilteredProductsPage.tsx
+// FILE: web/frontend/pages/FilteredProductsPage.tsx
+
 import React, { useMemo, useState } from "react";
 import {
   Page,
@@ -27,17 +28,14 @@ import {
   leaf,
   andGroup,
   type FilterExpr,
-} from "../../lib/filters/dsl";
+} from "../../frontend/lib/filters/dsl";
 import {
   productsByFilterRequest,
   type ProductLiteDto,
   type ProductsByFilterPageDto,
 } from "../queries/productsByFilter";
 
-/**
- * Build a FilterExpr from the UI state.
- * All filters here are FAST-plane: status, vendor, productType, tags, hasImages, minTotalInventory.
- */
+/* ====================== Build Filter AST ====================== */
 function buildFilterExprFromUi(params: {
   status: string;
   vendor: string;
@@ -49,46 +47,42 @@ function buildFilterExprFromUi(params: {
   const children: FilterExpr[] = [];
 
   if (params.status !== "ALL") {
-    children.push(leaf("product.status", "eq", params.status.toUpperCase()));
+    children.push(leaf("product.status", "EQ", params.status.toUpperCase()));
   }
 
   if (params.vendor.trim()) {
-    children.push(leaf("product.vendor", "contains", params.vendor.trim()));
+    children.push(leaf("product.vendor", "CONTAINS", params.vendor.trim()));
   }
 
   if (params.productType.trim()) {
     children.push(
-      leaf("product.productType", "contains", params.productType.trim()),
+      leaf("product.productType", "CONTAINS", params.productType.trim()),
     );
   }
 
   if (params.tag.trim()) {
-    children.push(leaf("product.tags", "contains", params.tag.trim()));
+    children.push(leaf("product.tags", "CONTAINS", params.tag.trim()));
   }
 
   if (params.hasImages === "YES") {
-    children.push(leaf("product.hasImages", "eq", true));
+    children.push(leaf("product.hasImages", "EQ", true));
   } else if (params.hasImages === "NO") {
-    children.push(leaf("product.hasImages", "eq", false));
+    children.push(leaf("product.hasImages", "EQ", false));
   }
 
   if (params.minTotalInventory.trim()) {
     const parsed = Number(params.minTotalInventory);
     if (!Number.isNaN(parsed)) {
-      children.push(leaf("product.totalInventory", "gte", parsed));
+      children.push(leaf("product.totalInventory", "GTE", parsed));
     }
   }
 
-  // If we have no children at all, return null so caller can decide
   if (children.length === 0) return null;
 
   return andGroup(children);
 }
 
-/**
- * Products hook – wraps productsByFilter with infinite scroll.
- * We always use FAST_ONLY on this page.
- */
+/* ====================== Products Hook ====================== */
 function useProductsByFilter(params: {
   app: AppBridgeState | undefined;
   filterExpr: FilterExpr | null;
@@ -98,7 +92,6 @@ function useProductsByFilter(params: {
   Error
 > {
   const { app, filterExpr, hasApplied } = params;
-
   const enabled = !!app && hasApplied;
 
   return useInfiniteQuery<
@@ -110,13 +103,10 @@ function useProductsByFilter(params: {
     enabled,
     initialPageParam: null as string | null,
     queryFn: async ({ pageParam }) => {
-      if (!app) {
-        throw new Error("AppBridge not ready");
-      }
+      if (!app) throw new Error("AppBridge not ready");
 
-      // Use empty AND group if filterExpr is null (show all products)
       const actualFilter =
-        filterExpr || ({ type: "group", op: "and", children: [] } as FilterExpr);
+        filterExpr || ({ kind: "group", op: "AND", children: [] } as FilterExpr);
 
       return productsByFilterRequest(app, {
         filter: actualFilter,
@@ -130,10 +120,10 @@ function useProductsByFilter(params: {
   });
 }
 
+/* ====================== Filtered Products Page ====================== */
 export default function FilteredProductsPage() {
   const app = useAppBridge();
 
-  // UI state for FAST filters
   const [status, setStatus] = useState<string>("ALL");
   const [vendor, setVendor] = useState("");
   const [productType, setProductType] = useState("");
@@ -141,11 +131,8 @@ export default function FilteredProductsPage() {
   const [hasImages, setHasImages] = useState<string>("ANY");
   const [minTotalInventory, setMinTotalInventory] = useState("");
 
-  // Start with null - no products shown until user clicks Apply
   const [appliedFilterExpr, setAppliedFilterExpr] =
     useState<FilterExpr | null>(null);
-
-  // Track if user has applied filters at least once
   const [hasApplied, setHasApplied] = useState(false);
 
   const uiFilterExpr = useMemo(
@@ -161,7 +148,6 @@ export default function FilteredProductsPage() {
     [status, vendor, productType, tag, hasImages, minTotalInventory],
   );
 
-  // Products for the applied filter
   const productsQuery = useProductsByFilter({
     app,
     filterExpr: appliedFilterExpr,
@@ -173,23 +159,16 @@ export default function FilteredProductsPage() {
     return productsQuery.data.pages.flatMap((p) => p.items);
   }, [productsQuery.data]);
 
-  const resourceName = {
-    singular: "product",
-    plural: "products",
-  };
-
+  const resourceName = { singular: "product", plural: "products" };
   const { selectedResources, allResourcesSelected, handleSelectionChange } =
-    useIndexResourceState(allItems, {
-      resourceIDResolver: (product) => product.id,
-    });
+    useIndexResourceState(allItems, { resourceIDResolver: (product) => product.id });
 
   const applying = productsQuery.isFetching && hasApplied;
   const loadingProducts = productsQuery.isLoading && hasApplied;
 
   const handleApplyFilters = () => {
-    // If UI filter is null, we send an empty AND group to mean "no filter"
     const newFilter =
-      uiFilterExpr || ({ type: "group", op: "and", children: [] } as FilterExpr);
+      uiFilterExpr || ({ kind: "group", op: "AND", children: [] } as FilterExpr);
     setAppliedFilterExpr(newFilter);
     setHasApplied(true);
   };
@@ -266,6 +245,7 @@ export default function FilteredProductsPage() {
                     autoComplete="off"
                   />
                 </InlineStack>
+
                 <InlineStack gap="200">
                   <Button
                     onClick={handleApplyFilters}
@@ -294,8 +274,7 @@ export default function FilteredProductsPage() {
             <Box padding="400">
               {!hasApplied && (
                 <Text as="p" variant="bodyMd" tone="subdued">
-                  Set your filters above and click "Apply filters" to see
-                  results.
+                  Set your filters above and click "Apply filters" to see results.
                 </Text>
               )}
               {hasApplied && loadingProducts && (
@@ -348,9 +327,7 @@ export default function FilteredProductsPage() {
                     </IndexTable.Cell>
                     <IndexTable.Cell>
                       <Badge
-                        tone={
-                          product.status === "ACTIVE" ? "success" : "subdued"
-                        }
+                        tone={product.status === "ACTIVE" ? "success" : "subdued"}
                       >
                         {product.status}
                       </Badge>
@@ -376,9 +353,7 @@ export default function FilteredProductsPage() {
                     <IndexTable.Cell>
                       <Text as="span" variant="bodySm" tone="subdued">
                         {product.updatedAtShopify
-                          ? new Date(
-                              product.updatedAtShopify,
-                            ).toLocaleString()
+                          ? new Date(product.updatedAtShopify).toLocaleString()
                           : "—"}
                       </Text>
                     </IndexTable.Cell>
