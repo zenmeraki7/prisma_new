@@ -1021,7 +1021,11 @@ app.post("/api/products", async (_req, res) => {
     error = e.message;
   }
   res.status(status).send({ success: status === 200, error });
+  res.status(status).send({ success: status === 200, error });
 });
+
+import { snapshotFilterHandler } from "./api/products/snapshotFilter.js";
+app.post("/api/products/snapshotFilter", snapshotFilterHandler);
 
 // ──────────────────────────────────────────────
 // CSP + Static frontend

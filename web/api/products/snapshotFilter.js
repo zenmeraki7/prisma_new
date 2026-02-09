@@ -1,8 +1,11 @@
-import type { Request, Response } from "express";
-import { prisma } from "../../db/prisma";
+import { prisma } from "../../db/prisma.js";
 import { applyVariantSnapshotFilter } from "../../lib/snapshots/applyVariantSnapshotFilter.js";
 
-export async function snapshotFilterHandler(req: Request, res: Response) {
+/**
+ * @param {import("express").Request} req
+ * @param {import("express").Response} res
+ */
+export async function snapshotFilterHandler(req, res) {
   try {
     const { planHash, filters } = req.body;
 
