@@ -2,210 +2,262 @@
 
 import React from "react";
 import {
-  Card,
   IndexTable,
+  Card,
+  useIndexResourceState,
   Text,
   Badge,
-  Button,
-  BlockStack,
-  InlineStack,
   Thumbnail,
-  Icon,
+  InlineStack,
+  BlockStack,
+  SkeletonBodyText,
+  SkeletonThumbnail,
+  Box,
 } from "@shopify/polaris";
 import { ImageIcon } from "@shopify/polaris-icons";
-
-export interface ProductRow {
-  id: string;
-  title: string;
-  handle: string;
-  status: string;
-  vendor?: string | null;
-  productType?: string | null;
-  tags: string[];
-  hasImages: boolean;
-  updatedAtShopify: string | null;
-  totalInventory?: number | null;
-  variantCount?: number | null;
-  // optional future: featuredImageUrl?: string | null;
-}
+import { useNavigate } from "react-router-dom";
+import type { ProductLiteNode } from "../hooks/useProductsByFilter";
 
 interface ProductIndexTableProps {
-  products: ProductRow[];
+  products: ProductLiteNode[];
   loading: boolean;
   hasNextPage: boolean;
-  onLoadMore?: () => void;
+  onLoadMore: () => void;
 }
 
 /**
- * Map product status to Polaris Badge tone
+ * ProductIndexTable
+ *
+ * - Assumes ProductLiteNode is aligned with bootstrapProducts / productsByFilter:
+ *   id, title, status, hasImages, vendor, productType, tags,
+ *   totalInventory?, variantCount?
+ *
+ * - Uses Polaris IndexTable for a familiar Shopify admin feel.
+ * - Handles loading skeletons, empty state, and cursor pagination.
  */
-function getStatusTone(status: string): "success" | "subdued" | "attention" | "info" | "critical" {
-  switch (status.toLowerCase()) {
-    case "active":
-      return "success";    // green
-    case "draft":
-      return "attention";  // yellow
-    case "archived":
-      return "critical";   // red-ish to clearly show archived
-    default:
-      return "info";       // blue fallback
-  }
-}
-
-
-/**
- * Format inventory number for display
- */
-function formatInventory(totalInventory?: number | null): string {
-  if (totalInventory == null) return "—";
-  return `${totalInventory} in stock`;
-}
-
-/**
- * Format variant count for display
- */
-function formatVariantCount(variantCount?: number | null): string {
-  if (variantCount == null) return "— variants";
-  if (variantCount === 1) return "1 variant";
-  return `${variantCount} variants`;
-}
-
-/**
- * Format updated date/time for display
- */
-function formatUpdatedAt(value: string | null): string {
-  if (!value) return "—";
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return value;
-  return d.toLocaleString();
-}
-
 export const ProductIndexTable: React.FC<ProductIndexTableProps> = ({
   products,
   loading,
   hasNextPage,
   onLoadMore,
 }) => {
-  const resourceName = { singular: "product", plural: "products" };
+  const navigate = useNavigate();
 
-  const rowsMarkup = products.map((product, index) => {
-    const {
-      id,
-      title,
-      vendor,
-      status,
-      productType,
-      tags,
-      hasImages,
-      updatedAtShopify,
-      totalInventory,
-      variantCount,
-    } = product;
+  const resourceName = {
+    singular: "product",
+    plural: "products",
+  };
 
-    const tagBadges = tags.slice(0, 3);
-    const extraTagCount = tags.length > 3 ? tags.length - 3 : 0;
+  const {
+    selectedResources,
+    allResourcesSelected,
+    handleSelectionChange,
+  } = useIndexResourceState(products as any);
 
-    // Normalize status for badge text
-    const normalizedStatus = status?.toLowerCase() || "";
-    const displayStatus = normalizedStatus.charAt(0).toUpperCase() + normalizedStatus.slice(1);
-
+  // -------------------------------------------------------
+  // Skeleton (Initial Loading)
+  // -------------------------------------------------------
+  if (loading && products.length === 0) {
     return (
-      <IndexTable.Row id={id} key={id} position={index}>
-        {/* 1. Image */}
-        <IndexTable.Cell>
-          <Thumbnail
-            size="small"
-            source={hasImages ? <Icon source={ImageIcon} /> : <Icon source={ImageIcon} />}
-            alt={title || "Product image"}
-          />
-        </IndexTable.Cell>
-
-        {/* 2. Product title + vendor */}
-        <IndexTable.Cell>
-          <BlockStack gap="025">
-            <Text as="span" variant="bodyMd" fontWeight="semibold">
-              {title || "Untitled product"}
-            </Text>
-            {vendor && (
-              <Text as="span" variant="bodySm" tone="subdued">
-                {vendor}
-              </Text>
-            )}
-          </BlockStack>
-        </IndexTable.Cell>
-
-        {/* 3. Status */}
-        <IndexTable.Cell>
-          <Badge tone={getStatusTone(normalizedStatus)}>{displayStatus}</Badge>
-        </IndexTable.Cell>
-
-        {/* 4. Inventory */}
-        <IndexTable.Cell>
-          <BlockStack gap="025">
-            <Text as="span" variant="bodySm">
-              {formatInventory(totalInventory)}
-            </Text>
-            <Text as="span" variant="bodySm" tone="subdued">
-              {formatVariantCount(variantCount)}
-            </Text>
-          </BlockStack>
-        </IndexTable.Cell>
-
-        {/* 5. Type & tags */}
-        <IndexTable.Cell>
-          <BlockStack gap="050">
-            <Text as="span" variant="bodySm">
-              {productType || "—"}
-            </Text>
-            {tagBadges.length > 0 && (
-              <InlineStack gap="050" wrap>
-                {tagBadges.map((tag) => (
-                  <Badge key={tag}>{tag}</Badge>
-                ))}
-                {extraTagCount > 0 && <Badge tone="subdued">+{extraTagCount}</Badge>}
-              </InlineStack>
-            )}
-          </BlockStack>
-        </IndexTable.Cell>
-
-        {/* 6. Last updated */}
-        <IndexTable.Cell>
-          <Text as="span" variant="bodySm" tone="subdued">
-            {formatUpdatedAt(updatedAtShopify)}
-          </Text>
-        </IndexTable.Cell>
-      </IndexTable.Row>
+      <Card>
+        <IndexTable
+          resourceName={resourceName}
+          itemCount={5}
+          selectable={false}
+          selectedItemsCount={0}
+          onSelectionChange={() => {}}
+          headings={[
+            { title: "" },
+            { title: "Product" },
+            { title: "Status" },
+            { title: "Inventory" },
+            { title: "Type" },
+          ]}
+        >
+          {Array.from({ length: 5 }).map((_, i) => (
+            <IndexTable.Row id={`skeleton-${i}`} key={i} position={i}>
+              <IndexTable.Cell>
+                <SkeletonThumbnail size="small" />
+              </IndexTable.Cell>
+              <IndexTable.Cell>
+                <SkeletonBodyText lines={2} />
+              </IndexTable.Cell>
+              <IndexTable.Cell>
+                <SkeletonBodyText lines={1} />
+              </IndexTable.Cell>
+              <IndexTable.Cell>
+                <SkeletonBodyText lines={1} />
+              </IndexTable.Cell>
+              <IndexTable.Cell>
+                <SkeletonBodyText lines={1} />
+              </IndexTable.Cell>
+            </IndexTable.Row>
+          ))}
+        </IndexTable>
+      </Card>
     );
-  });
+  }
 
+  // -------------------------------------------------------
+  // Empty State (No Products After Load)
+  // -------------------------------------------------------
+  if (!loading && products.length === 0) {
+    return (
+      <Card>
+        <Box padding="400">
+          <BlockStack gap="200">
+            <Text as="h2" variant="headingSm">
+              No products found
+            </Text>
+            <Text as="p" variant="bodySm" tone="subdued">
+              Try adjusting your filters or syncing products from Shopify.
+            </Text>
+          </BlockStack>
+        </Box>
+      </Card>
+    );
+  }
+
+  // -------------------------------------------------------
+  // Row Markup
+  // -------------------------------------------------------
+  const rowMarkup = products.map(
+    (
+      {
+        id,
+        title,
+        status,
+        hasImages,
+        vendor,
+        productType,
+        tags,
+        totalInventory,
+        variantCount,
+      },
+      index,
+    ) => {
+      const isSelected = selectedResources.includes(id);
+
+      const handleClick = () => {
+        navigate(`/products/${encodeURIComponent(id)}`);
+      };
+
+      const inventoryValue =
+        typeof totalInventory === "number" ? totalInventory : 0;
+      const variantValue =
+        typeof variantCount === "number" ? variantCount : 0;
+
+      return (
+        <IndexTable.Row
+          id={id}
+          key={id}
+          selected={isSelected}
+          position={index}
+          onClick={handleClick}
+        >
+          {/* 1. Image / Thumbnail */}
+          <IndexTable.Cell>
+            <Thumbnail
+              source={hasImages ? ImageIcon : ImageIcon}
+              alt={title}
+              size="small"
+            />
+          </IndexTable.Cell>
+
+          {/* 2. Title & Vendor */}
+          <IndexTable.Cell>
+            <BlockStack gap="050">
+              <Text variant="bodyMd" fontWeight="bold" as="span">
+                {title}
+              </Text>
+              {vendor && (
+                <Text variant="bodySm" tone="subdued" as="span">
+                  {vendor}
+                </Text>
+              )}
+            </BlockStack>
+          </IndexTable.Cell>
+
+          {/* 3. Status */}
+          <IndexTable.Cell>
+            <Badge
+              tone={
+                status === "ACTIVE"
+                  ? "success"
+                  : status === "DRAFT"
+                  ? "warning"
+                  : "info"
+              }
+            >
+              {status}
+            </Badge>
+          </IndexTable.Cell>
+
+          {/* 4. Inventory (FAST rollup) */}
+          <IndexTable.Cell>
+            <BlockStack gap="025">
+              <Text as="span" variant="bodyMd">
+                {inventoryValue} in stock
+              </Text>
+              <Text as="span" variant="bodySm" tone="subdued">
+                {variantValue} variants
+              </Text>
+            </BlockStack>
+          </IndexTable.Cell>
+
+          {/* 5. Type & Tags */}
+          <IndexTable.Cell>
+            <BlockStack gap="050">
+              <Text as="span" variant="bodySm">
+                {productType || "—"}
+              </Text>
+              {tags && tags.length > 0 && (
+                <InlineStack gap="050" wrap>
+                  {tags.slice(0, 3).map((tag) => (
+                    <Badge key={tag} tone="new" size="small">
+                      {tag}
+                    </Badge>
+                  ))}
+                  {tags.length > 3 && (
+                    <Text as="span" variant="bodyXs" tone="subdued">
+                      +{tags.length - 3}
+                    </Text>
+                  )}
+                </InlineStack>
+              )}
+            </BlockStack>
+          </IndexTable.Cell>
+        </IndexTable.Row>
+      );
+    },
+  );
+
+  // -------------------------------------------------------
+  // Main Render
+  // -------------------------------------------------------
   return (
     <Card padding="0">
       <IndexTable
         resourceName={resourceName}
         itemCount={products.length}
-        selectable={false}
-        loading={loading}
+        selectedItemsCount={
+          allResourcesSelected ? "All" : selectedResources.length
+        }
+        onSelectionChange={handleSelectionChange}
         headings={[
-          { title: "" }, // image
+          { title: "" }, // Image
           { title: "Product" },
           { title: "Status" },
           { title: "Inventory" },
           { title: "Type & tags" },
-          { title: "Last updated" },
         ]}
+        pagination={{
+          hasNext: hasNextPage,
+          onNext: onLoadMore,
+        }}
       >
-        {rowsMarkup}
+        {rowMarkup}
       </IndexTable>
-
-      {hasNextPage && onLoadMore && (
-        <div style={{ padding: "12px 16px" }}>
-          <InlineStack align="center">
-            <Button onClick={onLoadMore} disabled={loading}>
-              Load more
-            </Button>
-          </InlineStack>
-        </div>
-      )}
     </Card>
   );
 };

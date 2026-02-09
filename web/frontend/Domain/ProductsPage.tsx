@@ -1,3 +1,5 @@
+// FILE: web/frontend/pages/ProductsPage.tsx
+
 import React from "react";
 import {
   Page,
@@ -20,15 +22,21 @@ import { ProductIndexTable } from "../components/ProductIndexTable";
 import { FilterExecutionAlert } from "../components/FilterExecutionAlert";
 
 export const ProductsPage: React.FC = () => {
+  // -------------------------------------------------------
   // Local filter state
+  // -------------------------------------------------------
   const [searchText, setSearchText] = React.useState("");
 
+  // Build a simple FilterExpr: product.search CONTAINS searchText
   const filterExpr = React.useMemo<FilterExpr | null>(() => {
     const value = searchText.trim();
     if (!value) return null;
-    return field("product.title", "CONTAINS", value);
+    return field("product.search", "CONTAINS", value);
   }, [searchText]);
 
+  // -------------------------------------------------------
+  // Data: single-pass filter query (no waterfall)
+  // -------------------------------------------------------
   const {
     items,
     mode,
@@ -45,26 +53,47 @@ export const ProductsPage: React.FC = () => {
     enabled: true,
   });
 
-  const handleSearchChange = (value: string) => setSearchText(value);
-  const handleClearFilters = () => setSearchText("");
+  // -------------------------------------------------------
+  // Handlers
+  // -------------------------------------------------------
+  const handleSearchChange = (value: string) => {
+    setSearchText(value);
+  };
 
+  const handleClearFilters = () => {
+    setSearchText("");
+  };
+
+  // -------------------------------------------------------
+  // Render
+  // -------------------------------------------------------
   return (
     <Page
       title="Products"
       subtitle="Search, filter and bulk edit your catalog"
       fullWidth
       primaryAction={
-        <Button variant="primary" disabled={loading} onClick={() => {}}>
+        <Button
+          variant="primary"
+          disabled={loading}
+          onClick={() => {
+            // TODO: trigger a fast sync mutation here
+          }}
+        >
           Sync from Shopify
         </Button>
       }
     >
       <Layout>
-        {/* Filters */}
+        {/* Filters & execution info */}
         <Layout.Section>
           <Card>
             <BlockStack gap="300">
-              <InlineStack gap="200" align="space-between" blockAlign="center">
+              <InlineStack
+                gap="200"
+                align="space-between"
+                blockAlign="center"
+              >
                 <BlockStack gap="100">
                   <Text as="h2" variant="headingSm">
                     Filters
@@ -74,7 +103,7 @@ export const ProductsPage: React.FC = () => {
                       label="Search"
                       labelHidden
                       autoComplete="off"
-                      placeholder="Search by product title"
+                      placeholder="Search title / description / tags"
                       value={searchText}
                       onChange={handleSearchChange}
                     />
@@ -96,7 +125,12 @@ export const ProductsPage: React.FC = () => {
 
               <Divider />
 
-              <FilterExecutionAlert mode={mode} guardrail={guardrail} warnings={warnings} />
+              {/* Merchant-facing execution info (no AST jargon) */}
+              <FilterExecutionAlert
+                mode={mode}
+                guardrail={guardrail}
+                warnings={warnings}
+              />
             </BlockStack>
           </Card>
         </Layout.Section>
