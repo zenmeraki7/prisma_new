@@ -14,29 +14,28 @@ import {
   Divider,
 } from "@shopify/polaris";
 
-import type { FilterExpr } from "../lib/filters/dsl";
-import { field } from "../lib/filters/dsl";
+// IMPORTANT: we no longer use the DSL here.
+// import type { FilterExpr } from "../lib/filters/dsl";
+// import { field } from "../lib/filters/dsl";
 
 import { useProductsByFilter } from "../hooks/useProductsByFilter";
 import { ProductIndexTable } from "../components/ProductIndexTable";
 import { FilterExecutionAlert } from "../components/FilterExecutionAlert";
 
 export const ProductsPage: React.FC = () => {
-  // -------------------------------------------------------
-  // Local filter state
-  // -------------------------------------------------------
-  const [searchText, setSearchText] = React.useState("");
+  // What the user is typing
+  const [searchInput, setSearchInput] = React.useState("");
 
-  // Build a simple FilterExpr: product.search CONTAINS searchText
-  const filterExpr = React.useMemo<FilterExpr | null>(() => {
-    const value = searchText.trim();
-    if (!value) return null;
-    return field("product.search", "CONTAINS", value);
-  }, [searchText]);
+  // What is actually applied to the query
+  const [searchQuery, setSearchQuery] = React.useState("");
 
-  // -------------------------------------------------------
-  // Data: single-pass filter query (no waterfall)
-  // -------------------------------------------------------
+  // For the hook we send either a string or null.
+  // Cast to any so types that expect FilterExpr don't complain.
+  const filterExpr = React.useMemo<any>(() => {
+    const v = searchQuery.trim();
+    return v === "" ? null : v;
+  }, [searchQuery]);
+
   const {
     items,
     mode,
@@ -56,17 +55,33 @@ export const ProductsPage: React.FC = () => {
   // -------------------------------------------------------
   // Handlers
   // -------------------------------------------------------
-  const handleSearchChange = (value: string) => {
-    setSearchText(value);
+
+  const handleSearchInputChange = (value: string) => {
+    setSearchInput(value);
+  };
+
+  const applySearch = () => {
+    setSearchQuery(searchInput);
   };
 
   const handleClearFilters = () => {
-    setSearchText("");
+    setSearchInput("");
+    setSearchQuery("");
+  };
+
+  const handleSearchKeyDown: React.KeyboardEventHandler<HTMLInputElement> = (
+    event,
+  ) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      applySearch();
+    }
   };
 
   // -------------------------------------------------------
   // Render
   // -------------------------------------------------------
+
   return (
     <Page
       title="Products"
@@ -77,7 +92,7 @@ export const ProductsPage: React.FC = () => {
           variant="primary"
           disabled={loading}
           onClick={() => {
-            // TODO: trigger a fast sync mutation here
+            // TODO: wire to your fast sync trigger endpoint
           }}
         >
           Sync from Shopify
@@ -98,19 +113,30 @@ export const ProductsPage: React.FC = () => {
                   <Text as="h2" variant="headingSm">
                     Filters
                   </Text>
+
                   <InlineStack gap="200" blockAlign="center">
                     <TextField
-                      label="Search"
+                      label="Search title / description / vendor / tags"
                       labelHidden
                       autoComplete="off"
-                      placeholder="Search title / description / tags"
-                      value={searchText}
-                      onChange={handleSearchChange}
+                      placeholder="Search by product title, vendor, type, tags…"
+                      value={searchInput}
+                      onChange={handleSearchInputChange}
+                      onKeyDown={handleSearchKeyDown}
                     />
-                    {(searchText || filterExpr) && (
+                    <Button variant="primary" onClick={applySearch}>
+                      Search
+                    </Button>
+                    {(searchInput || searchQuery) && (
                       <Button onClick={handleClearFilters}>Clear</Button>
                     )}
                   </InlineStack>
+
+                  {searchQuery && (
+                    <Text as="p" variant="bodySm" tone="subdued">
+                      Showing results for: <strong>{searchQuery}</strong>
+                    </Text>
+                  )}
                 </BlockStack>
 
                 {loading && (
@@ -125,7 +151,6 @@ export const ProductsPage: React.FC = () => {
 
               <Divider />
 
-              {/* Merchant-facing execution info (no AST jargon) */}
               <FilterExecutionAlert
                 mode={mode}
                 guardrail={guardrail}

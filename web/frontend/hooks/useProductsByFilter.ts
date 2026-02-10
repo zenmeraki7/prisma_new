@@ -24,9 +24,9 @@ export interface ProductLiteNode {
   productType: string | null;
   tags: string[];
   hasImages: boolean;
-  updatedAtShopify: string;
   totalInventory: number | null;
   variantCount: number | null;
+   updatedAtShopify: string | null; // or Date | null
 }
 
 export interface ProductsByFilterPage {
@@ -49,9 +49,9 @@ const PRODUCTS_BY_FILTER_QUERY = /* GraphQL */ `
       productType
       tags
       hasImages
-      updatedAtShopify
       totalInventory
       variantCount
+      updatedAtShopify
     }
        nextCursor
     mode

@@ -9,10 +9,9 @@ import {
   Badge,
   Thumbnail,
   InlineStack,
-  BlockStack,
   SkeletonBodyText,
   SkeletonThumbnail,
-  Box,
+  Button,
 } from "@shopify/polaris";
 import { ImageIcon } from "@shopify/polaris-icons";
 import { useNavigate } from "react-router-dom";
@@ -25,16 +24,13 @@ interface ProductIndexTableProps {
   onLoadMore: () => void;
 }
 
-/**
- * ProductIndexTable
- *
- * - Assumes ProductLiteNode is aligned with bootstrapProducts / productsByFilter:
- *   id, title, status, hasImages, vendor, productType, tags,
- *   totalInventory?, variantCount?
- *
- * - Uses Polaris IndexTable for a familiar Shopify admin feel.
- * - Handles loading skeletons, empty state, and cursor pagination.
- */
+function formatUpdatedAt(value: string | Date | null | undefined): string {
+  if (!value) return "—";
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString();
+}
+
 export const ProductIndexTable: React.FC<ProductIndexTableProps> = ({
   products,
   loading,
@@ -48,22 +44,144 @@ export const ProductIndexTable: React.FC<ProductIndexTableProps> = ({
     plural: "products",
   };
 
-  const {
-    selectedResources,
-    allResourcesSelected,
-    handleSelectionChange,
-  } = useIndexResourceState(products as any);
+  const { selectedResources, allResourcesSelected, handleSelectionChange } =
+    useIndexResourceState(products as any);
 
-  // -------------------------------------------------------
-  // Skeleton (Initial Loading)
-  // -------------------------------------------------------
+  const rowMarkup = products.map(
+    (
+      {
+        id,
+        title,
+        status,
+        hasImages,
+        vendor,
+        productType,
+        tags,
+        totalInventory,
+        variantCount,
+        updatedAtShopify,
+      },
+      index,
+    ) => {
+      const isSelected = selectedResources.includes(id);
+
+      const handleTitleClick = (e: React.MouseEvent) => {
+        // don’t let this click toggle the checkbox / row selection
+        e.stopPropagation();
+        navigate(`/products/${encodeURIComponent(id)}`);
+      };
+
+      return (
+        <IndexTable.Row
+          id={id}
+          key={id}
+          selected={isSelected}
+          position={index}
+          // NOTE: no onClick on the Row itself → selection works
+        >
+          {/* 1. Image / Thumbnail */}
+          <IndexTable.Cell>
+            <Thumbnail
+              source={hasImages ? ImageIcon : ""}
+              alt={title}
+              size="small"
+            />
+          </IndexTable.Cell>
+
+          {/* 2. Product title & vendor (title is the clickable link) */}
+          <IndexTable.Cell>
+            <Button
+              variant="plain"
+              onClick={handleTitleClick}
+              removeUnderline
+            >
+              <Text variant="bodyMd" fontWeight="bold" as="span">
+                {title}
+              </Text>
+            </Button>
+            {vendor && (
+              <Text variant="bodySm" tone="subdued" as="span">
+                <br />
+                {vendor}
+              </Text>
+            )}
+          </IndexTable.Cell>
+
+          {/* 3. Status */}
+          <IndexTable.Cell>
+            <Badge
+              tone={
+                status === "ACTIVE"
+                  ? "success"
+                  : status === "DRAFT"
+                  ? "attention"
+                  : "info"
+              }
+            >
+              {status}
+            </Badge>
+          </IndexTable.Cell>
+
+          {/* 4. Inventory */}
+          <IndexTable.Cell>
+            <Text as="span" numeric>
+              {totalInventory != null ? `${totalInventory} in stock` : "—"}
+            </Text>
+            <Text as="span" variant="bodySm" tone="subdued">
+              <br />
+              {variantCount != null
+                ? `${variantCount} ${
+                    variantCount === 1 ? "variant" : "variants"
+                  }`
+                : "— variants"}
+            </Text>
+          </IndexTable.Cell>
+
+          {/* 5. Type & tags */}
+          <IndexTable.Cell>
+            <Text as="span" variant="bodySm">
+              {productType || "—"}
+            </Text>
+            {tags.length > 0 && (
+              <div
+                style={{
+                  marginTop: "4px",
+                  display: "flex",
+                  gap: "4px",
+                  flexWrap: "wrap",
+                }}
+              >
+                {tags.slice(0, 3).map((tag) => (
+                  <Badge key={tag} tone="new" size="small">
+                    {tag}
+                  </Badge>
+                ))}
+                {tags.length > 3 && (
+                  <span style={{ fontSize: "0.8em" }}>
+                    +{tags.length - 3}
+                  </span>
+                )}
+              </div>
+            )}
+          </IndexTable.Cell>
+
+          {/* 6. Last updated */}
+          <IndexTable.Cell>
+            <Text as="span" variant="bodySm" tone="subdued">
+              {formatUpdatedAt(updatedAtShopify)}
+            </Text>
+          </IndexTable.Cell>
+        </IndexTable.Row>
+      );
+    },
+  );
+
   if (loading && products.length === 0) {
     return (
       <Card>
         <IndexTable
           resourceName={resourceName}
-          itemCount={5}
-          selectable={false}
+          itemCount={10}
           selectedItemsCount={0}
           onSelectionChange={() => {}}
           headings={[
@@ -71,16 +189,20 @@ export const ProductIndexTable: React.FC<ProductIndexTableProps> = ({
             { title: "Product" },
             { title: "Status" },
             { title: "Inventory" },
-            { title: "Type" },
+            { title: "Type & tags" },
+            { title: "Last updated" },
           ]}
         >
           {Array.from({ length: 5 }).map((_, i) => (
-            <IndexTable.Row id={`skeleton-${i}`} key={i} position={i}>
+            <IndexTable.Row id={`skel-${i}`} key={i} position={i}>
               <IndexTable.Cell>
                 <SkeletonThumbnail size="small" />
               </IndexTable.Cell>
               <IndexTable.Cell>
                 <SkeletonBodyText lines={2} />
+              </IndexTable.Cell>
+              <IndexTable.Cell>
+                <SkeletonBodyText lines={1} />
               </IndexTable.Cell>
               <IndexTable.Cell>
                 <SkeletonBodyText lines={1} />
@@ -98,143 +220,6 @@ export const ProductIndexTable: React.FC<ProductIndexTableProps> = ({
     );
   }
 
-  // -------------------------------------------------------
-  // Empty State (No Products After Load)
-  // -------------------------------------------------------
-  if (!loading && products.length === 0) {
-    return (
-      <Card>
-        <Box padding="400">
-          <BlockStack gap="200">
-            <Text as="h2" variant="headingSm">
-              No products found
-            </Text>
-            <Text as="p" variant="bodySm" tone="subdued">
-              Try adjusting your filters or syncing products from Shopify.
-            </Text>
-          </BlockStack>
-        </Box>
-      </Card>
-    );
-  }
-
-  // -------------------------------------------------------
-  // Row Markup
-  // -------------------------------------------------------
-  const rowMarkup = products.map(
-    (
-      {
-        id,
-        title,
-        status,
-        hasImages,
-        vendor,
-        productType,
-        tags,
-        totalInventory,
-        variantCount,
-      },
-      index,
-    ) => {
-      const isSelected = selectedResources.includes(id);
-
-      const handleClick = () => {
-        navigate(`/products/${encodeURIComponent(id)}`);
-      };
-
-      const inventoryValue =
-        typeof totalInventory === "number" ? totalInventory : 0;
-      const variantValue =
-        typeof variantCount === "number" ? variantCount : 0;
-
-      return (
-        <IndexTable.Row
-          id={id}
-          key={id}
-          selected={isSelected}
-          position={index}
-          onClick={handleClick}
-        >
-          {/* 1. Image / Thumbnail */}
-          <IndexTable.Cell>
-            <Thumbnail
-              source={hasImages ? ImageIcon : ImageIcon}
-              alt={title}
-              size="small"
-            />
-          </IndexTable.Cell>
-
-          {/* 2. Title & Vendor */}
-          <IndexTable.Cell>
-            <BlockStack gap="050">
-              <Text variant="bodyMd" fontWeight="bold" as="span">
-                {title}
-              </Text>
-              {vendor && (
-                <Text variant="bodySm" tone="subdued" as="span">
-                  {vendor}
-                </Text>
-              )}
-            </BlockStack>
-          </IndexTable.Cell>
-
-          {/* 3. Status */}
-          <IndexTable.Cell>
-            <Badge
-              tone={
-                status === "ACTIVE"
-                  ? "success"
-                  : status === "DRAFT"
-                  ? "warning"
-                  : "info"
-              }
-            >
-              {status}
-            </Badge>
-          </IndexTable.Cell>
-
-          {/* 4. Inventory (FAST rollup) */}
-          <IndexTable.Cell>
-            <BlockStack gap="025">
-              <Text as="span" variant="bodyMd">
-                {inventoryValue} in stock
-              </Text>
-              <Text as="span" variant="bodySm" tone="subdued">
-                {variantValue} variants
-              </Text>
-            </BlockStack>
-          </IndexTable.Cell>
-
-          {/* 5. Type & Tags */}
-          <IndexTable.Cell>
-            <BlockStack gap="050">
-              <Text as="span" variant="bodySm">
-                {productType || "—"}
-              </Text>
-              {tags && tags.length > 0 && (
-                <InlineStack gap="050" wrap>
-                  {tags.slice(0, 3).map((tag) => (
-                    <Badge key={tag} tone="new" size="small">
-                      {tag}
-                    </Badge>
-                  ))}
-                  {tags.length > 3 && (
-                    <Text as="span" variant="bodyXs" tone="subdued">
-                      +{tags.length - 3}
-                    </Text>
-                  )}
-                </InlineStack>
-              )}
-            </BlockStack>
-          </IndexTable.Cell>
-        </IndexTable.Row>
-      );
-    },
-  );
-
-  // -------------------------------------------------------
-  // Main Render
-  // -------------------------------------------------------
   return (
     <Card padding="0">
       <IndexTable
@@ -245,11 +230,12 @@ export const ProductIndexTable: React.FC<ProductIndexTableProps> = ({
         }
         onSelectionChange={handleSelectionChange}
         headings={[
-          { title: "" }, // Image
+          { title: "" },
           { title: "Product" },
           { title: "Status" },
           { title: "Inventory" },
           { title: "Type & tags" },
+          { title: "Last updated" },
         ]}
         pagination={{
           hasNext: hasNextPage,

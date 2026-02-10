@@ -905,17 +905,18 @@ app.post("/api/graphql", async (req, res) => {
     }
 
     // ───────────────── productsByFilter (FAST plane) ─────────────────
+    // ───────────────── productsByFilter (FAST plane) ─────────────────
     if (query.includes("productsByFilter")) {
       try {
         const input = variables?.input || {};
         const first = Number(input.first ?? 50);
         const after = input.after ?? null;
-        const filterExpr = input.filter || null;
+        const filterExpr = input.filter ?? null; // can be string or AST in future
 
         console.log(`🔍 productsByFilter called:`, {
           first,
           after,
-          filterExpr: JSON.stringify(filterExpr, null, 2),
+          filterExpr,
         });
 
         const shop = await prisma.shop.findUnique({
@@ -932,7 +933,7 @@ app.post("/api/graphql", async (req, res) => {
                 mode: "FAST_ONLY",
                 guardrail: {
                   candidateCount: 0,
-                  candidateLimit: 50000,
+                  candidateLimit: 0,
                   candidateLimitHit: false,
                 },
                 warnings: [],
@@ -941,9 +942,34 @@ app.post("/api/graphql", async (req, res) => {
           });
         }
 
-        const where = buildProductWhereFromFilter(shop.id, filterExpr);
+        /** @type {import('@prisma/client').Prisma.ProductLiteWhereInput} */
+        let where = { shopId: shop.id };
 
-        console.log(`🔎 Prisma where clause:`, JSON.stringify(where, null, 2));
+        // NEW: simple string search mode (title / vendor / type / handle / tags)
+        if (typeof filterExpr === "string" && filterExpr.trim() !== "") {
+          const search = filterExpr.trim();
+          where = {
+            shopId: shop.id,
+            AND: [
+              {
+                OR: [
+                  { title: { contains: search, mode: "insensitive" } },
+                  { vendor: { contains: search, mode: "insensitive" } },
+                  { productType: { contains: search, mode: "insensitive" } },
+                  { handle: { contains: search, mode: "insensitive" } },
+                  // tags is a text[] column
+                  { tags: { has: search } },
+                ],
+              },
+            ],
+          };
+        }
+        // Future: if you later send a real AST again, you can fall back:
+        else if (filterExpr && typeof filterExpr === "object") {
+          where = buildProductWhereFromFilter(shop.id, filterExpr);
+        }
+
+        console.log("🔎 Prisma where clause:", JSON.stringify(where, null, 2));
 
         const offset = after ? parseInt(after, 10) : 0;
 
@@ -952,13 +978,24 @@ app.post("/api/graphql", async (req, res) => {
           orderBy: { updatedAtShopify: "desc" },
           take: first,
           skip: offset,
-          // NOTE: no include here; tags are stored directly on ProductLite.tags[]
+          select: {
+            id: true,
+            productId: true,
+            title: true,
+            handle: true,
+            status: true,
+            vendor: true,
+            productType: true,
+            tags: true,
+            hasImages: true,
+            updatedAtShopify: true,
+          },
         });
 
         console.log(`📦 Found ${items.length} products matching filters`);
 
         const transformedItems = items.map((item) => ({
-          id: item.productId,
+          id: item.productId, // Shopify GID to the frontend
           title: item.title,
           handle: item.handle,
           status: item.status,
@@ -967,19 +1004,10 @@ app.post("/api/graphql", async (req, res) => {
           tags: item.tags || [],
           hasImages: item.hasImages,
           updatedAtShopify: item.updatedAtShopify,
-          totalInventory: item.totalInventory ?? null,
-          variantCount: item.variantCount ?? null,
         }));
 
         const nextCursor =
           items.length === first ? String(offset + items.length) : null;
-
-        // Simple guardrail stub so frontend has shape
-        const guardrail = {
-          candidateCount: transformedItems.length,
-          candidateLimit: 50000,
-          candidateLimitHit: false,
-        };
 
         return res.json({
           data: {
@@ -987,7 +1015,11 @@ app.post("/api/graphql", async (req, res) => {
               items: transformedItems,
               nextCursor,
               mode: "FAST_ONLY",
-              guardrail,
+              guardrail: {
+                candidateCount: transformedItems.length,
+                candidateLimit: 5000,
+                candidateLimitHit: false,
+              },
               warnings: [],
             },
           },
