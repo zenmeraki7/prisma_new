@@ -1,31 +1,53 @@
 import { prisma } from "../../db/prisma.js";
 
-type VariantFilter = {
+export type VariantFilter = {
     key: string;
     op: string;
     value: any;
     value2?: any;
 };
 
+/**
+ * Deterministic planHash from filters so snapshotFilter and trigger use the same run.
+ */
+export function computePlanHashFromFilters(filters: VariantFilter[]): string {
+    if (!filters?.length) return "pf_0";
+    const clauses = [...filters]
+        .filter((f) => f && typeof f.key === "string")
+        .map((f) => ({ key: f.key, op: f.op, value: f.value }))
+        .sort((a, b) => a.key.localeCompare(b.key));
+    const ast = { op: "and" as const, clauses, groups: [] as any[] };
+    const json = JSON.stringify(ast);
+    let hash = 0;
+    for (let i = 0; i < json.length; i += 1) {
+        const chr = json.charCodeAt(i);
+        hash = (hash << 5) - hash + chr;
+        hash |= 0;
+    }
+    return `pf_${(hash >>> 0).toString(16)}`;
+}
+
 export async function applyVariantSnapshotFilter({
-    planHash,
+    planHash: planHashParam,
+    shopId,
     filters,
 }: {
-    planHash: string;
+    planHash?: string;
+    shopId: string;
     filters: VariantFilter[];
 }): Promise<string[]> {
-    // In the new architecture, the snapshot worker (runSnapshot.ts)
-    // ALREADY evaluated the filters and saved the matching product IDs
-    // into the SnapshotProduct table for this run.
-    //
-    // So we just need to:
-    // 1. Find the latest SUCCEEDED SnapshotRun for this planHash.
-    // 2. Return the productIds linked to it.
+    const planHash =
+        planHashParam && typeof planHashParam === "string"
+            ? planHashParam
+            : computePlanHashFromFilters(filters ?? []);
 
-    // 1. Find successful run
+    if (!prisma) throw new Error("Prisma client not initialized");
+
+    // 1. Find successful run (scoped by shop)
     const run = await prisma.snapshotRun.findFirst({
         where: {
             planHash,
+            shopId,
             state: "SUCCEEDED",
         },
         orderBy: { createdAt: "desc" },

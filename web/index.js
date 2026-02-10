@@ -9,6 +9,7 @@ import shopify from "./shopify.js";
 import productCreator from "./product-creator.js";
 import PrivacyWebhookHandlers from "./privacy.js";
 import { prisma } from "./db/prisma.js";
+import { computePlanHashFromFilters } from "./lib/snapshots/applyVariantSnapshotFilter.js";
 
 const PORT = parseInt(
   process.env.BACKEND_PORT || process.env.PORT || "3000",
@@ -96,6 +97,40 @@ function buildProductWhereFromFilter(shopId, filterExpr) {
 }
 
 /**
+ * Returns true if filterExpr contains any leaf that is a snapshot/variant field
+ * (filterId starting with "variant."). Those require the Bulk Ops evaluator, not ProductLite.
+ * @param {any} filterExpr
+ * @returns {boolean}
+ */
+function hasSnapshotLeaves(filterExpr) {
+  if (!filterExpr) return false;
+  if (filterExpr.type === "leaf") {
+    const id = String(filterExpr.filterId ?? "");
+    return id.startsWith("variant.");
+  }
+  if (filterExpr.type === "group" && Array.isArray(filterExpr.children)) {
+    return filterExpr.children.some((child) => hasSnapshotLeaves(child));
+  }
+  return false;
+}
+
+/**
+ * Walk filterExpr and collect leaf clauses as { key, op, value } for planHash consistency.
+ * @param {any} filterExpr
+ * @returns {{ key: string, op: string, value: any }[]}
+ */
+function filterExprToClauses(filterExpr) {
+  if (!filterExpr) return [];
+  if (filterExpr.type === "leaf" && filterExpr.filterId) {
+    return [{ key: String(filterExpr.filterId), op: filterExpr.op ?? "eq", value: filterExpr.value }];
+  }
+  if (filterExpr.type === "group" && Array.isArray(filterExpr.children)) {
+    return filterExpr.children.flatMap((c) => filterExprToClauses(c));
+  }
+  return [];
+}
+
+/**
  * Real snapshot builder:
  *  - Creates a SnapshotRun row
  *  - Selects product IDs from FAST plane based on filter
@@ -135,6 +170,69 @@ async function buildSnapshotForPlanHash({ shop, planHash, filterExpr, filterSumm
   await logEvent("INFO", "Snapshot run started.");
 
   try {
+    const useVariantEvaluator = hasSnapshotLeaves(filterExpr);
+
+    if (useVariantEvaluator) {
+      // Variant filters: use Bulk Ops evaluator (server-side variant data)
+      let productIds;
+      try {
+        const mod = await import("./lib/snapshots/shopifySnapshotEvaluator.js");
+        const set = await mod.evaluateSnapshotFilterToProductGids({
+          shopId: shop.id,
+          filter: filterExpr,
+        });
+        productIds = Array.from(set);
+      } catch (e) {
+        await logEvent(
+          "ERROR",
+          "Variant snapshot evaluator failed. Ensure lib/snapshots is compiled to JS or use the snapshot worker. " +
+            (e?.message ?? String(e))
+        );
+        throw e;
+      }
+
+      const total = productIds.length;
+      await prisma.snapshotRun.update({
+        where: { id: runId },
+        data: { total },
+      });
+      await logEvent("INFO", `Planning snapshot for ${total} products (variant evaluator).`);
+
+      const pageSize = 500;
+      const now = new Date();
+      for (let i = 0; i < productIds.length; i += pageSize) {
+        const chunk = productIds.slice(i, i + pageSize);
+        const products = await prisma.productLite.findMany({
+          where: { shopId: shop.id, id: { in: chunk } },
+          select: { id: true, updatedAtShopify: true },
+        });
+        const byId = new Map(products.map((p) => [p.id, p.updatedAtShopify ?? now]));
+        await prisma.snapshotProduct.createMany({
+          data: chunk.map((id) => ({
+            shopId: shop.id,
+            snapshotRunId: runId,
+            productId: id,
+            sortKey: byId.get(id) ?? now,
+          })),
+          skipDuplicates: true,
+        });
+        const processed = Math.min(i + pageSize, productIds.length);
+        await prisma.snapshotRun.update({
+          where: { id: runId },
+          data: { progress: processed },
+        });
+        await logEvent("INFO", `Processed ${processed} of ${total} products.`);
+      }
+
+      await prisma.snapshotRun.update({
+        where: { id: runId },
+        data: { state: "SUCCEEDED" },
+      });
+      await logEvent("INFO", `Snapshot completed for ${total} products.`);
+      return await prisma.snapshotRun.findUnique({ where: { id: runId } });
+    }
+
+    // FAST-only: use ProductLite WHERE
     const where = buildProductWhereFromFilter(shop.id, filterExpr);
 
     // 2) Count total matching products
@@ -648,15 +746,9 @@ app.post("/api/graphql", async (req, res) => {
 
     // ───────────────── triggerSnapshotRun (build real snapshot) ─────────────────
     if (query.includes("triggerSnapshotRun")) {
-      const planHash = variables?.planHash;
+      const planHashFromClient = variables?.planHash;
       const filterExpr = variables?.filterJson ?? null;
       const filterSummary = variables?.filterSummary ?? null;
-
-      if (!planHash || typeof planHash !== "string") {
-        return res
-          .status(400)
-          .json({ errors: [{ message: "planHash is required" }] });
-      }
 
       const shop = await prisma.shop.findUnique({
         where: { shopDomain },
@@ -666,6 +758,19 @@ app.post("/api/graphql", async (req, res) => {
         return res.status(400).json({
           errors: [{ message: `No Shop row found for ${shopDomain}` }],
         });
+      }
+
+      // Use server-computed planHash from filterExpr so snapshotFilter (which gets filters) finds this run
+      const clauses = filterExprToClauses(filterExpr);
+      const planHash =
+        clauses.length > 0
+          ? computePlanHashFromFilters(clauses)
+          : planHashFromClient;
+
+      if (!planHash || typeof planHash !== "string") {
+        return res
+          .status(400)
+          .json({ errors: [{ message: "planHash or filterJson is required" }] });
       }
 
       const run = await buildSnapshotForPlanHash({

@@ -236,7 +236,7 @@ function matchesSnapshotLeaf(
   leaf: FilterLeafExpr
 ): boolean {
   const def = getFilterDef(leaf.filterId);
-  if (def.plane !== "SNAPSHOT") {
+  if (!def || def.plane !== "SNAPSHOT") {
     // FAST-plane filters are ignored here; for mixed plans you combine
     // FAST + SNAPSHOT results via IDs (planner). But when executing
     // a pure snapshot evaluator, you should only see SNAPSHOT leaves.
@@ -246,7 +246,7 @@ function matchesSnapshotLeaf(
   const path = def.snapshotField?.shopifyPath;
   if (!path) {
     throw new Error(
-      `Snapshot evaluator: filterId "${def.id}" is SNAPSHOT but missing snapshotField.shopifyPath.`
+      `Snapshot evaluator: filterId "${def.key}" is SNAPSHOT but missing snapshotField.shopifyPath.`
     );
   }
 

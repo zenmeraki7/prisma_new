@@ -7,6 +7,17 @@ import { applyVariantSnapshotFilter } from "../../lib/snapshots/applyVariantSnap
  */
 export async function snapshotFilterHandler(req, res) {
   try {
+    const session = res.locals.shopify?.session;
+    if (!session) {
+      return res.status(401).json({ error: "Unauthenticated" });
+    }
+    const shop = await prisma.shop.findUnique({
+      where: { shopDomain: session.shop },
+    });
+    if (!shop) {
+      return res.status(400).json({ error: "Shop not found" });
+    }
+
     const { planHash, filters } = req.body;
 
     console.log("📥 Snapshot filter request received");
@@ -19,14 +30,15 @@ export async function snapshotFilterHandler(req, res) {
 
     const productIds = await applyVariantSnapshotFilter({
       planHash,
+      shopId: shop.id,
       filters,
     });
 
     console.log("✅ Snapshot matched productIds:", productIds.length);
 
-    // Return minimal product info (frontend already has FAST data)
+    // Return minimal product info (frontend already has FAST data). ProductLite has composite key (shopId, id).
     const items = await prisma.productLite.findMany({
-      where: { id: { in: productIds } },
+      where: { shopId: shop.id, id: { in: productIds } },
       select: { id: true },
     });
 

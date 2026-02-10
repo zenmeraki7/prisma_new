@@ -99,6 +99,21 @@ export type FieldDef = {
    * - false → UI-visible but planner must ignore or snapshot
    */
   supportedNow: boolean;
+
+  /**
+   * Execution plane: FAST = ProductLite/DB, SNAPSHOT = evaluated via Bulk Ops / variant data.
+   * Used by snapshot evaluator and fast compiler.
+   */
+  plane?: "FAST" | "SNAPSHOT";
+
+  /** For SNAPSHOT: product-level vs variant-level (e.g. variant.sku is "variant"). */
+  scope?: "product" | "variant";
+
+  /** For SNAPSHOT: path to read from Shopify Bulk API node (e.g. "variant.sku"). */
+  snapshotField?: { shopifyPath: string };
+
+  /** Value type for operators: "string" | "number" | "datetime" | "boolean" etc. */
+  valueKind?: string;
 };
 
 /* ============================================================
@@ -189,6 +204,10 @@ export const VARIANT_FIELDS: readonly FieldDef[] = [
     entity: "variant",
     kind: "string",
     supportedNow: false,
+    plane: "SNAPSHOT",
+    scope: "variant",
+    snapshotField: { shopifyPath: "variant.sku" },
+    valueKind: "string",
   },
   {
     key: "variant.price",
@@ -196,6 +215,10 @@ export const VARIANT_FIELDS: readonly FieldDef[] = [
     entity: "variant",
     kind: "number",
     supportedNow: false,
+    plane: "SNAPSHOT",
+    scope: "variant",
+    snapshotField: { shopifyPath: "variant.price" },
+    valueKind: "number",
   },
   {
     key: "variant.inventoryQuantity",
@@ -203,6 +226,10 @@ export const VARIANT_FIELDS: readonly FieldDef[] = [
     entity: "variant",
     kind: "number",
     supportedNow: false,
+    plane: "SNAPSHOT",
+    scope: "variant",
+    snapshotField: { shopifyPath: "variant.inventoryQuantity" },
+    valueKind: "number",
   },
 ];
 
@@ -221,6 +248,11 @@ export const FILTER_REGISTRY: readonly FieldDef[] = [
 
 export function getFieldDef(key: string): FieldDef | undefined {
   return FILTER_REGISTRY.find((f) => f.key === key);
+}
+
+/** Alias for snapshot evaluator and fast compiler (lookup by filterId/key). */
+export function getFilterDef(key: string): FieldDef | undefined {
+  return getFieldDef(key);
 }
 
 export function fieldLabel(key: string): string {

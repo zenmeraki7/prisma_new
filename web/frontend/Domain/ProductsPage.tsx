@@ -139,15 +139,14 @@ export default function ProductsPage() {
 
     const run = async () => {
       try {
-        console.log("🚀 [ProductsPage] Starting snapshot filter run", { planHash, filters: variantFilters });
+        console.log("🚀 [ProductsPage] Starting snapshot filter run", { filters: variantFilters });
         setLoadingSnapshotFilters(true);
 
-        const planHash = fastStatus?.fastRevision?.toString() ?? "unknown";
-
+        // Server derives planHash from filters and finds the matching snapshot run (same as trigger)
         const res = await fetch("/api/products/snapshotFilter", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ planHash, filters: variantFilters }),
+          body: JSON.stringify({ filters: variantFilters }),
         });
 
         console.log("📨 [ProductsPage] Snapshot filter response status:", res.status);
@@ -173,12 +172,21 @@ export default function ProductsPage() {
       cancelled = true;
       clearTimeout(t);
     };
-  }, [variantFilters, fastStatus?.fastRevision, fetch]);
+  }, [variantFilters, fetch]);
 
   // -----------------------
-  // FINAL ITEMS (FAST WINS)
+  // FINAL ITEMS: when variant filters are applied, restrict to server-side snapshot result
   // -----------------------
-  const finalItems = filteredFastItems;
+  const snapshotIdSet = useMemo(
+    () => new Set(snapshotFilteredItems.map((i) => i.id)),
+    [snapshotFilteredItems],
+  );
+  const finalItems =
+    variantFilters.length > 0
+      ? loadingSnapshotFilters
+        ? filteredFastItems
+        : filteredFastItems.filter((p) => snapshotIdSet.has(p.id))
+      : filteredFastItems;
 
   // -----------------------
   // Render
