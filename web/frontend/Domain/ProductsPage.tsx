@@ -1,40 +1,71 @@
 // FILE: web/frontend/pages/ProductsPage.tsx
-
 import React from "react";
-import {
-  Page,
-  Layout,
-  Card,
-  TextField,
-  InlineStack,
-  BlockStack,
-  Button,
-  Text,
-  Spinner,
-  Divider,
-} from "@shopify/polaris";
+import { Page, Layout, Card, BlockStack, Button } from "@shopify/polaris";
 
-// IMPORTANT: we no longer use the DSL here.
-// import type { FilterExpr } from "../lib/filters/dsl";
-// import { field } from "../lib/filters/dsl";
+import type { FilterExpr } from "../lib/filters/dsl";
+import { andGroup, field } from "../lib/filters/dsl";
 
 import { useProductsByFilter } from "../hooks/useProductsByFilter";
 import { ProductIndexTable } from "../components/ProductIndexTable";
 import { FilterExecutionAlert } from "../components/FilterExecutionAlert";
 
+import type { DraftFilter } from "../components/ProductsFilterBar";
+import { ProductsFilterBar } from "../components/ProductsFilterBar";
+
 export const ProductsPage: React.FC = () => {
-  // What the user is typing
-  const [searchInput, setSearchInput] = React.useState("");
+  const [searchText, setSearchText] = React.useState("");
+  const [draftFilters, setDraftFilters] = React.useState<DraftFilter[]>([]);
+  const [appliedExpr, setAppliedExpr] = React.useState<FilterExpr | null>(null);
 
-  // What is actually applied to the query
-  const [searchQuery, setSearchQuery] = React.useState("");
+  // Forces react-query to treat “applied” as new request and reset infinite pages
+  const [requestKey, setRequestKey] = React.useState(0);
 
-  // For the hook we send either a string or null.
-  // Cast to any so types that expect FilterExpr don't complain.
-  const filterExpr = React.useMemo<any>(() => {
-    const v = searchQuery.trim();
-    return v === "" ? null : v;
-  }, [searchQuery]);
+  const buildExpr = React.useCallback((): FilterExpr | null => {
+    const leaves: FilterExpr[] = [];
+
+    const s = searchText.trim();
+    if (s) {
+      // keep stable behavior: title contains
+      leaves.push(field("product.title" as any, "CONTAINS" as any, s));
+    }
+
+    for (const f of draftFilters) {
+      // IMPORTANT: pass the raw key/op/value exactly — backend normalizes
+      leaves.push(field(f.key as any, f.op as any, f.value));
+    }
+
+    if (leaves.length === 0) return null;
+    return andGroup(leaves);
+  }, [searchText, draftFilters]);
+
+  const onApply = React.useCallback(() => {
+    setAppliedExpr(buildExpr());
+    setRequestKey((x) => x + 1);
+  }, [buildExpr]);
+
+  const onReset = React.useCallback(() => {
+    setSearchText("");
+    setDraftFilters([]);
+    setAppliedExpr(null);
+    setRequestKey((x) => x + 1);
+  }, []);
+
+  const fetchSuggestions = React.useCallback(async (key: string, q: string) => {
+    const resp = await fetch("/api/graphql", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query: `
+          query FilterSuggestions($input: FilterSuggestionsInput!) {
+            filterSuggestions(input: $input)
+          }
+        `,
+        variables: { input: { key, q, limit: 10 } },
+      }),
+    });
+    const json = await resp.json();
+    return (json?.data?.filterSuggestions || []) as string[];
+  }, []);
 
   const {
     items,
@@ -47,40 +78,12 @@ export const ProductsPage: React.FC = () => {
     loadingMore,
     error,
   } = useProductsByFilter({
-    filterExpr,
+    // include requestKey so apply/reset always restarts pagination cleanly
+    requestKey,
+    filterExpr: appliedExpr,
     pageSize: 50,
     enabled: true,
   });
-
-  // -------------------------------------------------------
-  // Handlers
-  // -------------------------------------------------------
-
-  const handleSearchInputChange = (value: string) => {
-    setSearchInput(value);
-  };
-
-  const applySearch = () => {
-    setSearchQuery(searchInput);
-  };
-
-  const handleClearFilters = () => {
-    setSearchInput("");
-    setSearchQuery("");
-  };
-
-  const handleSearchKeyDown: React.KeyboardEventHandler<HTMLInputElement> = (
-    event,
-  ) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      applySearch();
-    }
-  };
-
-  // -------------------------------------------------------
-  // Render
-  // -------------------------------------------------------
 
   return (
     <Page
@@ -88,89 +91,37 @@ export const ProductsPage: React.FC = () => {
       subtitle="Search, filter and bulk edit your catalog"
       fullWidth
       primaryAction={
-        <Button
-          variant="primary"
-          disabled={loading}
-          onClick={() => {
-            // TODO: wire to your fast sync trigger endpoint
-          }}
-        >
+        <Button variant="primary" disabled={loading} onClick={() => {}}>
           Sync from Shopify
         </Button>
       }
     >
       <Layout>
-        {/* Filters & execution info */}
         <Layout.Section>
-          <Card>
-            <BlockStack gap="300">
-              <InlineStack
-                gap="200"
-                align="space-between"
-                blockAlign="center"
-              >
-                <BlockStack gap="100">
-                  <Text as="h2" variant="headingSm">
-                    Filters
-                  </Text>
-
-                  <InlineStack gap="200" blockAlign="center">
-                    <TextField
-                      label="Search title / description / vendor / tags"
-                      labelHidden
-                      autoComplete="off"
-                      placeholder="Search by product title, vendor, type, tags…"
-                      value={searchInput}
-                      onChange={handleSearchInputChange}
-                      onKeyDown={handleSearchKeyDown}
-                    />
-                    <Button variant="primary" onClick={applySearch}>
-                      Search
-                    </Button>
-                    {(searchInput || searchQuery) && (
-                      <Button onClick={handleClearFilters}>Clear</Button>
-                    )}
-                  </InlineStack>
-
-                  {searchQuery && (
-                    <Text as="p" variant="bodySm" tone="subdued">
-                      Showing results for: <strong>{searchQuery}</strong>
-                    </Text>
-                  )}
-                </BlockStack>
-
-                {loading && (
-                  <InlineStack gap="100" blockAlign="center">
-                    <Spinner size="small" />
-                    <Text as="span" variant="bodySm" tone="subdued">
-                      Loading products…
-                    </Text>
-                  </InlineStack>
-                )}
-              </InlineStack>
-
-              <Divider />
-
-              <FilterExecutionAlert
-                mode={mode}
-                guardrail={guardrail}
-                warnings={warnings}
-              />
-            </BlockStack>
+          <Card padding="0">
+            <ProductsFilterBar
+              searchText={searchText}
+              onSearchTextChange={setSearchText}
+              draftFilters={draftFilters}
+              onDraftFiltersChange={setDraftFilters}
+              onApply={onApply}
+              onReset={onReset}
+              loading={loading}
+              fetchSuggestions={fetchSuggestions}
+            />
+            <div style={{ padding: 16 }}>
+              <FilterExecutionAlert mode={mode} guardrail={guardrail} warnings={warnings} />
+            </div>
           </Card>
         </Layout.Section>
 
-        {/* Product table */}
         <Layout.Section>
           {error ? (
             <Card>
               <BlockStack gap="200">
-                <Text as="h2" variant="headingSm">
-                  Something went wrong
-                </Text>
-                <Text as="p" variant="bodySm" tone="critical">
+                <div style={{ color: "var(--p-color-text-critical)" }}>
                   {(error as Error).message}
-                </Text>
+                </div>
               </BlockStack>
             </Card>
           ) : (
@@ -183,12 +134,9 @@ export const ProductsPage: React.FC = () => {
           )}
 
           {loadingMore && items.length > 0 && (
-            <BlockStack gap="100" align="center">
-              <Spinner size="small" />
-              <Text as="span" variant="bodySm" tone="subdued">
-                Loading more products…
-              </Text>
-            </BlockStack>
+            <div style={{ paddingTop: 12, textAlign: "center" }}>
+              Loading more…
+            </div>
           )}
         </Layout.Section>
       </Layout>

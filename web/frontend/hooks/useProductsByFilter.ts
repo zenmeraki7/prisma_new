@@ -1,13 +1,10 @@
+// FILE: web/frontend/hooks/useProductsByFilter.ts
 import { useMemo } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { graphqlRequest } from "../../utils/graphqlClient";
 import type { FilterExpr } from "../lib/filters/dsl";
 
-export type FilterExecutionMode =
-  | "AUTO"
-  | "FAST_ONLY"
-  | "SNAPSHOT_ONLY"
-  | "HYBRID";
+export type FilterExecutionMode = "AUTO" | "FAST_ONLY" | "SNAPSHOT_ONLY" | "HYBRID";
 
 export interface FilterGuardrailInfo {
   candidateCount: number;
@@ -26,7 +23,7 @@ export interface ProductLiteNode {
   hasImages: boolean;
   totalInventory: number | null;
   variantCount: number | null;
-   updatedAtShopify: string | null; // or Date | null
+  updatedAtShopify: string | null;
 }
 
 export interface ProductsByFilterPage {
@@ -39,33 +36,34 @@ export interface ProductsByFilterPage {
 
 const PRODUCTS_BY_FILTER_QUERY = /* GraphQL */ `
   query ProductsByFilter($input: ProductsByFilterInput!) {
-  productsByFilter(input: $input) {
-    items {
-      id
-      title
-      handle
-      status
-      vendor
-      productType
-      tags
-      hasImages
-      totalInventory
-      variantCount
-      updatedAtShopify
+    productsByFilter(input: $input) {
+      items {
+        id
+        title
+        handle
+        status
+        vendor
+        productType
+        tags
+        hasImages
+        totalInventory
+        variantCount
+        updatedAtShopify
+      }
+      nextCursor
+      mode
+      guardrail {
+        candidateCount
+        candidateLimit
+        candidateLimitHit
+      }
+      warnings
     }
-       nextCursor
-    mode
-    guardrail {
-      candidateCount
-      candidateLimit
-      candidateLimitHit
-    }
-    warnings
   }
-}
 `;
 
 export interface UseProductsByFilterOptions {
+  requestKey?: number; // IMPORTANT: changes when Apply/Reset pressed
   filterExpr: FilterExpr | null;
   snapshotRunId?: string | null;
   pageSize?: number;
@@ -73,65 +71,49 @@ export interface UseProductsByFilterOptions {
 }
 
 export function useProductsByFilter(options: UseProductsByFilterOptions) {
-  const { filterExpr, snapshotRunId, pageSize = 50, enabled = true } = options;
+  const { requestKey = 0, filterExpr, snapshotRunId, pageSize = 50, enabled = true } = options;
 
-  const queryInput = useMemo(
+  // Stable key: stringify filterExpr so the key changes only when content changes
+  const filterKey = useMemo(() => JSON.stringify(filterExpr ?? null), [filterExpr]);
+
+  const baseInput = useMemo(
     () => ({
       filter: filterExpr,
       mode: "AUTO" as const,
       first: pageSize,
       snapshotRunId: snapshotRunId ?? undefined,
     }),
-    [filterExpr, pageSize, snapshotRunId]
+    [filterExpr, pageSize, snapshotRunId],
   );
 
-  const {
-    data,
-    isLoading,
-    isFetchingNextPage,
-    fetchNextPage,
-    hasNextPage,
-    error,
-  } = useInfiniteQuery<ProductsByFilterPage>({
-    queryKey: ["productsByFilter", queryInput],
+  const query = useInfiniteQuery<ProductsByFilterPage>({
+    queryKey: ["productsByFilter", requestKey, pageSize, snapshotRunId ?? null, filterKey],
     enabled,
-    getNextPageParam: (lastPage) => lastPage.nextCursor || undefined,
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     queryFn: async ({ pageParam }) => {
-      const payload = { ...queryInput, after: (pageParam as string) ?? null };
+      const payload = { ...baseInput, after: (pageParam as string) ?? null };
       const response = await graphqlRequest<{ productsByFilter: ProductsByFilterPage }>(
         PRODUCTS_BY_FILTER_QUERY,
-        { input: payload }
+        { input: payload },
       );
       return response.productsByFilter;
     },
     placeholderData: (prev) => prev,
   });
 
-  const items: ProductLiteNode[] = data?.pages.flatMap((p) => p.items) ?? [];
-
-  const lastPage = data?.pages[data.pages.length - 1];
-
-  // Safely read mode, guardrail, warnings from last page
-  const mode: FilterExecutionMode = lastPage?.mode ?? "AUTO";
-  const guardrail: FilterGuardrailInfo | null = lastPage?.guardrail ?? null;
-  const warnings: string[] = lastPage?.warnings ?? [];
+  const items: ProductLiteNode[] = query.data?.pages.flatMap((p) => p.items) ?? [];
+  const lastPage = query.data?.pages[query.data.pages.length - 1];
 
   return {
-    // Data
     items,
-
-    // Execution meta
-    mode,
-    guardrail,
-    warnings,
-
-    // Pagination
-    hasNextPage,
-    loadMore: fetchNextPage,
-
-    // Status
-    loading: isLoading,
-    loadingMore: isFetchingNextPage,
-    error,
+    mode: lastPage?.mode ?? "AUTO",
+    guardrail: lastPage?.guardrail ?? null,
+    warnings: lastPage?.warnings ?? [],
+    hasNextPage: query.hasNextPage,
+    loadMore: query.fetchNextPage,
+    loading: query.isLoading,
+    loadingMore: query.isFetchingNextPage,
+    error: query.error,
   };
 }
