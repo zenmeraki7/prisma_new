@@ -18,22 +18,6 @@ const STATIC_PATH =
     : `${process.cwd()}/frontend/`;
 
 /* ──────────────────────────────────────────────
-   Helper: safely serialize Prisma models (BigInt → string)
-────────────────────────────────────────────── */
-function serializePrisma(value) {
-  if (value === null || value === undefined) return value;
-  if (typeof value === "bigint") return value.toString();
-  if (Array.isArray(value)) return value.map((v) => serializePrisma(v));
-  if (value instanceof Date) return value.toISOString();
-  if (typeof value === "object") {
-    const out = {};
-    for (const [k, v] of Object.entries(value)) out[k] = serializePrisma(v);
-    return out;
-  }
-  return value;
-}
-
-/* ──────────────────────────────────────────────
    Runtime DB test
 ────────────────────────────────────────────── */
 async function testDbConnection() {
@@ -46,15 +30,8 @@ async function testDbConnection() {
 }
 
 /* ──────────────────────────────────────────────
-   Small parsing helpers
+   Parse helpers
 ────────────────────────────────────────────── */
-function parseBooleanInput(value) {
-  if (typeof value === "boolean") return value;
-  if (value == null) return false;
-  const s = String(value).trim().toLowerCase();
-  return s === "true" || s === "1" || s === "yes" || s === "y";
-}
-
 function parseNumberInput(value) {
   const n = typeof value === "number" ? value : Number(value);
   return Number.isFinite(n) ? n : null;
@@ -69,7 +46,6 @@ function parseDateInput(value) {
 
 /* ──────────────────────────────────────────────
    Normalize filter AST -> leaf list
-   (supports MANY shapes to avoid frontend/backend mismatch)
 ────────────────────────────────────────────── */
 const OP_MAP = new Map([
   ["CONTAINS", "contains"],
@@ -115,7 +91,6 @@ function normalizeOp(op) {
 function normalizeLeaf(node) {
   if (!node || typeof node !== "object") return null;
 
-  // accept leaf in multiple formats
   const filterId =
     node.filterId ||
     node.key ||
@@ -145,7 +120,6 @@ function normalizeToLeaves(expr, out) {
     return;
   }
 
-  // Some DSLs wrap in { type:'group', and:[...]} etc.
   if (Array.isArray(expr.and)) for (const c of expr.and) normalizeToLeaves(c, out);
   if (Array.isArray(expr.AND)) for (const c of expr.AND) normalizeToLeaves(c, out);
   if (Array.isArray(expr.or)) for (const c of expr.or) normalizeToLeaves(c, out);
@@ -153,11 +127,73 @@ function normalizeToLeaves(expr, out) {
 }
 
 /* ──────────────────────────────────────────────
+   ✅ Stable "mixed" ordering (seeded hash)
+   - NOT ASC/DESC
+   - stable across pagination if seed is constant
+────────────────────────────────────────────── */
+function fnv1a32(str) {
+  let h = 0x811c9dc5; // 2166136261
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193); // 16777619
+  }
+  return h >>> 0;
+}
+
+function mixedRank(productId, seed) {
+  // returns uint32
+  return fnv1a32(`${seed}::${productId}`);
+}
+
+async function fetchMixedProductPage({ shopId, where, first, offset, seed }) {
+  // Guardrail: cap matched IDs we’re willing to "mix" in memory.
+  // Raise later once you move to SQL compiler.
+  const MAX_MIX_CANDIDATES = 20000;
+
+  // Step 1: fetch candidate productIds only (cheap columns)
+  // NOTE: no orderBy – DB returns some natural order (irrelevant; we re-sort)
+  const idRows = await prisma.productLite.findMany({
+    where,
+    select: { productId: true },
+    take: MAX_MIX_CANDIDATES,
+  });
+
+  const ids = idRows.map((r) => r.productId);
+
+  // Step 2: stable mixed sort by seeded hash
+  ids.sort((a, b) => {
+    const ra = mixedRank(a, seed);
+    const rb = mixedRank(b, seed);
+    if (ra !== rb) return ra - rb;
+    // tie-breaker for absolute determinism
+    return a < b ? -1 : a > b ? 1 : 0;
+  });
+
+  // Step 3: slice page
+  const pageIds = ids.slice(offset, offset + first);
+
+  if (pageIds.length === 0) return { items: [], nextCursor: null, candidateCount: ids.length };
+
+  // Step 4: fetch full rows for those ids
+  const rows = await prisma.productLite.findMany({
+    where: { shopId, productId: { in: pageIds } },
+  });
+
+  // Step 5: reorder rows exactly in pageIds order
+  const byId = new Map(rows.map((r) => [r.productId, r]));
+  const ordered = pageIds.map((id) => byId.get(id)).filter(Boolean);
+
+  const nextCursor = offset + first < ids.length ? String(offset + pageIds.length) : null;
+
+  return {
+    items: ordered,
+    nextCursor,
+    candidateCount: ids.length,
+  };
+}
+
+/* ──────────────────────────────────────────────
    Build Prisma where from filter leaves
-   CRITICAL FIX:
-   - use AND[] to avoid overwriting where.variants / where.variantRollup
-   - normalize status to Shopify enum strings
-   - mode:"insensitive" for string contains
 ────────────────────────────────────────────── */
 function buildProductWhereFromFilter(shopId, filterExprRaw) {
   /** @type {import('@prisma/client').Prisma.ProductLiteWhereInput} */
@@ -165,7 +201,6 @@ function buildProductWhereFromFilter(shopId, filterExprRaw) {
 
   const leaves = [];
   normalizeToLeaves(filterExprRaw, leaves);
-
   if (leaves.length === 0) return where;
 
   /** @type {import('@prisma/client').Prisma.ProductLiteWhereInput[]} */
@@ -174,8 +209,24 @@ function buildProductWhereFromFilter(shopId, filterExprRaw) {
   for (const child of leaves) {
     const { filterId, op, value } = child;
 
-    // ───────── PRODUCT FIELDS ─────────
+    // ✅ Search bar: title/vendor/handle/type OR tags(has)
+    if (filterId === "product.search" && op === "contains") {
+      const q = String(value ?? "").trim();
+      if (!q) continue;
 
+      AND.push({
+        OR: [
+          { title: { contains: q, mode: "insensitive" } },
+          { vendor: { contains: q, mode: "insensitive" } },
+          { handle: { contains: q, mode: "insensitive" } },
+          { productType: { contains: q, mode: "insensitive" } },
+          { tags: { has: q } }, // FAST tags: exact token match
+        ],
+      });
+      continue;
+    }
+
+    // ───────── PRODUCT FIELDS ─────────
     if (filterId === "product.title" && op === "contains") {
       AND.push({ title: { contains: String(value), mode: "insensitive" } });
       continue;
@@ -196,12 +247,10 @@ function buildProductWhereFromFilter(shopId, filterExprRaw) {
       continue;
     }
 
-    // Status MUST be EQ (DRAFT/ACTIVE/ARCHIVED). We still allow contains if it's a text column.
     if (filterId === "product.status") {
       const raw = String(value ?? "").trim();
       if (!raw) continue;
-
-      const normalized = raw.toUpperCase(); // Draft -> DRAFT, archived -> ARCHIVED
+      const normalized = raw.toUpperCase();
 
       if (op === "eq") {
         AND.push({ status: normalized });
@@ -211,13 +260,9 @@ function buildProductWhereFromFilter(shopId, filterExprRaw) {
       continue;
     }
 
-    // Tags: FAST plane safe default = EXACT match.
-    // (Ablestar-like substring tag search needs normalized tag table or snapshot/sql unnest)
     if (filterId === "product.tag") {
       const v = String(value ?? "").trim();
       if (!v) continue;
-
-      // EQ and CONTAINS both behave like exact in this FAST implementation
       AND.push({ tags: { has: v } });
       continue;
     }
@@ -225,7 +270,6 @@ function buildProductWhereFromFilter(shopId, filterExprRaw) {
     if (filterId === "product.updatedAt" && ["gte", "lte", "gt", "lt", "eq"].includes(op)) {
       const d = parseDateInput(value);
       if (!d) continue;
-
       if (op === "eq") AND.push({ updatedAtShopify: d });
       else AND.push({ updatedAtShopify: { [op]: d } });
       continue;
@@ -234,7 +278,6 @@ function buildProductWhereFromFilter(shopId, filterExprRaw) {
     if (filterId === "product.createdAt" && ["gte", "lte", "gt", "lt", "eq"].includes(op)) {
       const d = parseDateInput(value);
       if (!d) continue;
-
       if (op === "eq") AND.push({ createdAtShopify: d });
       else AND.push({ createdAtShopify: { [op]: d } });
       continue;
@@ -243,7 +286,6 @@ function buildProductWhereFromFilter(shopId, filterExprRaw) {
     if (filterId === "product.publishedAt" && ["gte", "lte", "gt", "lt", "eq"].includes(op)) {
       const d = parseDateInput(value);
       if (!d) continue;
-
       if (op === "eq") AND.push({ publishedAtShopify: d });
       else AND.push({ publishedAtShopify: { [op]: d } });
       continue;
@@ -252,7 +294,6 @@ function buildProductWhereFromFilter(shopId, filterExprRaw) {
     if (filterId === "product.variantCount" && ["gte", "lte", "gt", "lt", "eq"].includes(op)) {
       const n = parseNumberInput(value);
       if (n == null) continue;
-
       AND.push({ variantCount: op === "eq" ? n : { [op]: n } });
       continue;
     }
@@ -260,13 +301,11 @@ function buildProductWhereFromFilter(shopId, filterExprRaw) {
     if (filterId === "product.inventoryQuantity" && ["gte", "lte", "gt", "lt", "eq"].includes(op)) {
       const n = parseNumberInput(value);
       if (n == null) continue;
-
       AND.push({ variantRollup: { is: { totalInventory: op === "eq" ? n : { [op]: n } } } });
       continue;
     }
 
     // ───────── VARIANT FIELDS ─────────
-
     if (filterId === "variant.sku" && op === "contains") {
       AND.push({
         variants: { some: { sku: { contains: String(value), mode: "insensitive" } } },
@@ -386,7 +425,6 @@ app.post("/api/graphql", async (req, res) => {
       }
 
       if (key === "product.tag") {
-        // tags is text[]; suggestions need distinct values. Use unnest.
         const rows = await prisma.$queryRawUnsafe(
           `
           select distinct t as value
@@ -445,7 +483,82 @@ app.post("/api/graphql", async (req, res) => {
       return res.json({ data: { filterSuggestions: values } });
     }
 
-    /* ───────────────── syncProductsToDb ───────────────── */
+    /* ───────────────── productsByFilter (FAST plane) ───────────────── */
+    if (query.includes("productsByFilter")) {
+      const input = variables?.input || {};
+      const first = Math.min(Math.max(Number(input.first ?? 50), 1), 100);
+      const after = input.after ?? null;
+      const filterExpr = input.filter || null;
+
+      // ✅ IMPORTANT: seed controls the “mixed” order.
+      // If FE doesn't send seed, this stays stable per filter (good for pagination).
+      const seed =
+        typeof input.seed === "string" && input.seed.trim()
+          ? input.seed.trim()
+          : `shop:${shopDomain}::filter:${JSON.stringify(filterExpr ?? null)}`;
+
+      const shop = await prisma.shop.findUnique({ where: { shopDomain } });
+      if (!shop) {
+        return res.json({
+          data: {
+            productsByFilter: {
+              items: [],
+              nextCursor: null,
+              mode: "FAST_ONLY",
+              guardrail: { candidateCount: 0, candidateLimit: 0, candidateLimitHit: false },
+              warnings: [],
+            },
+          },
+        });
+      }
+
+      const where = buildProductWhereFromFilter(shop.id, filterExpr);
+
+      // Offset pagination
+      const offset = after ? parseInt(after, 10) : 0;
+
+      // ✅ Mixed + pagination-safe
+      const page = await fetchMixedProductPage({
+        shopId: shop.id,
+        where,
+        first,
+        offset,
+        seed,
+      });
+
+      const transformedItems = page.items.map((item) => ({
+        id: item.productId,
+        productId: item.productId,
+        title: item.title,
+        handle: item.handle,
+        status: item.status,
+        vendor: item.vendor,
+        productType: item.productType,
+        tags: item.tags || [],
+        hasImages: item.hasImages,
+        updatedAtShopify: item.updatedAtShopify,
+        totalInventory: item.totalInventory ?? 0,
+        variantCount: item.variantCount ?? 0,
+      }));
+
+      return res.json({
+        data: {
+          productsByFilter: {
+            items: transformedItems,
+            nextCursor: page.nextCursor,
+            mode: "FAST_ONLY",
+            guardrail: {
+              candidateCount: page.candidateCount,
+              candidateLimit: 20000,
+              candidateLimitHit: page.candidateCount >= 20000,
+            },
+            warnings: page.candidateCount >= 20000 ? ["MIX_ORDER_CAPPED"] : [],
+          },
+        },
+      });
+    }
+
+    /* ───────────────── syncProductsToDb (unchanged) ───────────────── */
     if (query.includes("syncProductsToDb")) {
       try {
         const first = Number(variables?.first ?? 50);
@@ -549,85 +662,6 @@ app.post("/api/graphql", async (req, res) => {
         console.error("❌ syncProductsToDb error:", syncError);
         return res.status(500).json({
           errors: [{ message: "Sync failed", details: syncError?.message || String(syncError) }],
-        });
-      }
-    }
-
-    /* ───────────────── productsByFilter (FAST plane) ───────────────── */
-    if (query.includes("productsByFilter")) {
-      try {
-        const input = variables?.input || {};
-        const first = Math.min(Math.max(Number(input.first ?? 50), 1), 100);
-        const after = input.after ?? null;
-        const filterExpr = input.filter || null;
-
-        const shop = await prisma.shop.findUnique({ where: { shopDomain } });
-        if (!shop) {
-          return res.json({
-            data: {
-              productsByFilter: {
-                items: [],
-                nextCursor: null,
-                mode: "FAST_ONLY",
-                guardrail: { candidateCount: 0, candidateLimit: 0, candidateLimitHit: false },
-                warnings: [],
-              },
-            },
-          });
-        }
-
-        const where = buildProductWhereFromFilter(shop.id, filterExpr);
-
-        // Offset pagination (keep as-is)
-        const offset = after ? parseInt(after, 10) : 0;
-
-        // Helpful debug (turn on if needed)
-        // console.log("FILTER RAW:", JSON.stringify(filterExpr, null, 2));
-        // console.log("WHERE:", JSON.stringify(where, null, 2));
-
-        const items = await prisma.productLite.findMany({
-          where,
-          orderBy: { updatedAtShopify: "desc" },
-          take: first,
-          skip: offset,
-        });
-
-        const transformedItems = items.map((item) => ({
-          id: item.productId, // outward ID
-          productId: item.productId,
-          title: item.title,
-          handle: item.handle,
-          status: item.status,
-          vendor: item.vendor,
-          productType: item.productType,
-          tags: item.tags || [],
-          hasImages: item.hasImages,
-          updatedAtShopify: item.updatedAtShopify,
-          totalInventory: item.totalInventory ?? 0,
-          variantCount: item.variantCount ?? 0,
-        }));
-
-        const nextCursor = items.length === first ? String(offset + items.length) : null;
-
-        return res.json({
-          data: {
-            productsByFilter: {
-              items: transformedItems,
-              nextCursor,
-              mode: "FAST_ONLY",
-              guardrail: {
-                candidateCount: transformedItems.length,
-                candidateLimit: 1000000,
-                candidateLimitHit: false,
-              },
-              warnings: [],
-            },
-          },
-        });
-      } catch (filterError) {
-        console.error("❌ productsByFilter error:", filterError);
-        return res.status(500).json({
-          errors: [{ message: "Filter query failed", details: filterError?.message || String(filterError) }],
         });
       }
     }

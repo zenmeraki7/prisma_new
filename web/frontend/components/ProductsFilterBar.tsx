@@ -8,42 +8,23 @@ import {
   Filters,
   ChoiceList,
   TextField,
-  RangeSlider,
   Select,
-  Tag,
+  Badge,
 } from "@shopify/polaris";
 
-export type DraftFilter =
-  | {
-      id: string;
-      key:
-        | "product.vendor"
-        | "product.productType"
-        | "product.tag"
-        | "product.title"
-        | "product.handle"
-        | "product.status"
-        | "product.updatedAt"
-        | "product.createdAt"
-        | "product.publishedAt"
-        | "product.variantCount"
-        | "product.inventoryQuantity"
-        | "variant.sku"
-        | "variant.barcode"
-        | "variant.inventoryQuantity"
-        | "variant.price"
-        | "variant.compareAtPrice"
-        | "variant.cost"
-        | "variant.weight";
-      op: "CONTAINS" | "EQ" | "GTE" | "LTE";
-      value: any;
-    }
-  | {
-      id: string;
-      key: "product.status";
-      op: "EQ";
-      value: "ACTIVE" | "DRAFT" | "ARCHIVED";
-    };
+import type {
+  UiFilterDef,
+  FilterKey,
+  FilterOperator,
+} from "../lib/filters/uiRegistry";
+import { UI_FILTERS, UI_FILTERS_BY_KEY } from "../lib/filters/uiRegistry";
+
+export type DraftFilter = {
+  id: string;
+  key: FilterKey;
+  op: FilterOperator;
+  value: any;
+};
 
 function uid() {
   return Math.random().toString(16).slice(2) + Date.now().toString(16);
@@ -65,60 +46,24 @@ type Props = {
   fetchSuggestions: (key: string, q: string) => Promise<string[]>;
 };
 
-type FilterDef = {
-  key: DraftFilter["key"];
-  label: string;
-  kind: "string" | "number" | "date" | "enum";
-  defaultOp: DraftFilter["op"];
-  ops: DraftFilter["op"][];
-  suggestion?: boolean;
-  enumValues?: { label: string; value: string }[];
+// ---- operator labels (Ablestar-ish) ----
+const OP_LABEL: Record<string, string> = {
+  EQ: "is",
+  NEQ: "is not",
+  IN: "is any of",
+  NOT_IN: "is none of",
+  CONTAINS: "contains",
+  NOT_CONTAINS: "does not contain",
+  STARTS_WITH: "starts with",
+  ENDS_WITH: "ends with",
+  GT: "greater than",
+  GTE: "at least",
+  LT: "less than",
+  LTE: "at most",
+  BETWEEN: "between",
+  IS_SET: "is set",
+  IS_NOT_SET: "is not set",
 };
-
-const FILTER_DEFS: FilterDef[] = [
-  // Product fields
-  { key: "product.title", label: "Title", kind: "string", defaultOp: "CONTAINS", ops: ["CONTAINS", "EQ"], suggestion: true },
-  { key: "product.vendor", label: "Vendor", kind: "string", defaultOp: "CONTAINS", ops: ["CONTAINS", "EQ"], suggestion: true },
-  { key: "product.productType", label: "Product type (Custom)", kind: "string", defaultOp: "CONTAINS", ops: ["CONTAINS", "EQ"], suggestion: true },
-  { key: "product.handle", label: "Handle (URL)", kind: "string", defaultOp: "CONTAINS", ops: ["CONTAINS", "EQ"], suggestion: true },
-  { key: "product.tag", label: "Tag", kind: "string", defaultOp: "CONTAINS", ops: ["CONTAINS", "EQ"], suggestion: true },
-
-  {
-    key: "product.status",
-    label: "Status",
-    kind: "enum",
-    defaultOp: "EQ",
-    ops: ["EQ"],
-    enumValues: [
-      { label: "Active", value: "ACTIVE" },
-      { label: "Draft", value: "DRAFT" },
-      { label: "Archived", value: "ARCHIVED" },
-    ],
-  },
-
-  { key: "product.createdAt", label: "Date Created", kind: "date", defaultOp: "GTE", ops: ["GTE", "LTE"] },
-  { key: "product.publishedAt", label: "Date Published", kind: "date", defaultOp: "GTE", ops: ["GTE", "LTE"] },
-  { key: "product.updatedAt", label: "Date Updated", kind: "date", defaultOp: "GTE", ops: ["GTE", "LTE"] },
-
-  { key: "product.variantCount", label: "Variant Count", kind: "number", defaultOp: "GTE", ops: ["GTE", "LTE", "EQ"] },
-  { key: "product.inventoryQuantity", label: "Inventory Quantity", kind: "number", defaultOp: "GTE", ops: ["GTE", "LTE", "EQ"] },
-
-  // Variant fields
-  { key: "variant.sku", label: "SKU", kind: "string", defaultOp: "CONTAINS", ops: ["CONTAINS", "EQ"], suggestion: true },
-  { key: "variant.barcode", label: "Barcode", kind: "string", defaultOp: "CONTAINS", ops: ["CONTAINS", "EQ"], suggestion: true },
-
-  { key: "variant.inventoryQuantity", label: "Variant Inventory Quantity", kind: "number", defaultOp: "GTE", ops: ["GTE", "LTE", "EQ"] },
-  { key: "variant.price", label: "Price", kind: "number", defaultOp: "GTE", ops: ["GTE", "LTE", "EQ"] },
-  { key: "variant.compareAtPrice", label: "Compare-at Price", kind: "number", defaultOp: "GTE", ops: ["GTE", "LTE", "EQ"] },
-  { key: "variant.cost", label: "Cost", kind: "number", defaultOp: "GTE", ops: ["GTE", "LTE", "EQ"] },
-  { key: "variant.weight", label: "Weight", kind: "number", defaultOp: "GTE", ops: ["GTE", "LTE", "EQ"] },
-];
-
-function defFor(key: DraftFilter["key"]) {
-  const d = FILTER_DEFS.find((x) => x.key === key);
-  if (!d) throw new Error(`Unknown filter key: ${key}`);
-  return d;
-}
 
 function setFilter(
   draftFilters: DraftFilter[],
@@ -127,12 +72,41 @@ function setFilter(
   const idx = draftFilters.findIndex((f) => f.key === patch.key);
   if (idx === -1) return [...draftFilters, patch];
   const next = [...draftFilters];
-  next[idx] = { ...next[idx], ...patch } as any;
+  next[idx] = { ...next[idx], ...patch };
   return next;
 }
 
-function removeFilterByKey(draftFilters: DraftFilter[], key: DraftFilter["key"]) {
+function removeFilterByKey(draftFilters: DraftFilter[], key: FilterKey) {
   return draftFilters.filter((f) => f.key !== key);
+}
+
+function defFor(key: FilterKey): UiFilterDef {
+  const d = UI_FILTERS_BY_KEY.get(key);
+  if (!d) throw new Error(`Unknown filter key: ${key}`);
+  return d;
+}
+
+function defaultValueFor(def: UiFilterDef) {
+  if (def.widget === "boolean") return "true";
+  if (def.widget === "select") return def.enumValues?.[0]?.value ?? "";
+  if (def.valueKind === "number") return "";
+  if (def.valueKind === "date") return "";
+  if (def.valueKind === "text") return "";
+  return "";
+}
+
+function normalizeValueForStorage(
+  def: UiFilterDef,
+  op: FilterOperator,
+  raw: any,
+) {
+  // Keep it simple: backend normalizes. But ensure BETWEEN uses [a,b].
+  if (op === "BETWEEN") {
+    const a = raw?.[0] ?? "";
+    const b = raw?.[1] ?? "";
+    return [a, b];
+  }
+  return raw;
 }
 
 export const ProductsFilterBar: React.FC<Props> = ({
@@ -145,21 +119,24 @@ export const ProductsFilterBar: React.FC<Props> = ({
   loading,
   fetchSuggestions,
 }) => {
-  // “Apply” should be enabled if there is anything to apply
   const hasAnyDraft =
     searchText.trim().length > 0 ||
     draftFilters.some((f) => {
-      if (f.key === "product.status") return Boolean(f.value);
+      if (f.op === "IS_SET" || f.op === "IS_NOT_SET") return true;
+      if (f.op === "BETWEEN") {
+        const a = String(f.value?.[0] ?? "").trim();
+        const b = String(f.value?.[1] ?? "").trim();
+        return a.length > 0 || b.length > 0;
+      }
       return String(f.value ?? "").trim().length > 0;
     });
 
-  // ---------- Search query input (top bar) ----------
   const queryValue = searchText;
   const onQueryChange = (v: string) => onSearchTextChange(v);
   const onQueryClear = () => onSearchTextChange("");
 
-  // ---------- Build controls for “Add filter” dropdown ----------
-  const filters = FILTER_DEFS.map((d) => {
+  // Build “Add filter” dropdown from UI_FILTERS (SSOT)
+  const filters = UI_FILTERS.map((d) => {
     return {
       key: d.key,
       label: d.label,
@@ -175,8 +152,10 @@ export const ProductsFilterBar: React.FC<Props> = ({
     };
   });
 
-  // ---------- Applied filter “pills” ----------
-  const appliedFilters = buildAppliedFilters(draftFilters, onDraftFiltersChange);
+  const appliedFilters = buildAppliedFilters(
+    draftFilters,
+    onDraftFiltersChange,
+  );
 
   return (
     <Box padding="400">
@@ -190,17 +169,16 @@ export const ProductsFilterBar: React.FC<Props> = ({
               onQueryClear={onQueryClear}
               filters={filters}
               appliedFilters={appliedFilters}
-              onClearAll={() => {
-                onQueryClear();
-                onDraftFiltersChange([]);
-              }}
+              onClearAll={onReset} // ✅ THIS LINE
             />
           </div>
 
           <InlineStack gap="200" blockAlign="center">
             <Button
               onClick={onReset}
-              disabled={Boolean(loading) || (!hasAnyDraft && draftFilters.length === 0)}
+              disabled={
+                Boolean(loading) || (!hasAnyDraft && draftFilters.length === 0)
+              }
             >
               Reset
             </Button>
@@ -223,27 +201,53 @@ function buildAppliedFilters(
   draftFilters: DraftFilter[],
   onDraftFiltersChange: (f: DraftFilter[]) => void,
 ) {
-  const applied = [];
+  const applied: { key: string; label: string; onRemove: () => void }[] = [];
 
   for (const f of draftFilters) {
     const d = defFor(f.key);
 
-    let labelValue = "";
-    if (d.kind === "enum") {
-      const item = d.enumValues?.find((x) => x.value === f.value);
-      labelValue = item?.label ?? String(f.value ?? "");
-    } else if (d.kind === "date") {
-      labelValue = String(f.value ?? "");
-    } else {
-      labelValue = String(f.value ?? "");
+    // Skip empty values (except is_set/is_not_set)
+    if (f.op !== "IS_SET" && f.op !== "IS_NOT_SET") {
+      if (f.op === "BETWEEN") {
+        const a = String(f.value?.[0] ?? "").trim();
+        const b = String(f.value?.[1] ?? "").trim();
+        if (!a && !b) continue;
+      } else {
+        const v = String(f.value ?? "").trim();
+        if (!v) continue;
+      }
     }
 
-    if (!labelValue) continue;
+    const opLabel = OP_LABEL[String(f.op)] ?? String(f.op).toLowerCase();
+
+    let valueLabel = "";
+    if (f.op === "IS_SET") valueLabel = "";
+    else if (f.op === "IS_NOT_SET") valueLabel = "";
+    else if (d.widget === "select") {
+      const item = d.enumValues?.find((x) => x.value === f.value);
+      valueLabel = item?.label ?? String(f.value ?? "");
+    } else if (d.widget === "boolean") {
+      valueLabel = String(f.value) === "true" ? "True" : "False";
+    } else if (f.op === "BETWEEN") {
+      const a = String(f.value?.[0] ?? "").trim();
+      const b = String(f.value?.[1] ?? "").trim();
+      valueLabel = `${a || "…"} and ${b || "…"}`;
+    } else {
+      valueLabel = String(f.value ?? "");
+    }
+
+    const label =
+      f.op === "IS_SET"
+        ? `${d.label} is set`
+        : f.op === "IS_NOT_SET"
+        ? `${d.label} is not set`
+        : `${d.label} ${opLabel} ${valueLabel}`.trim();
 
     applied.push({
       key: f.key,
-      label: `${d.label} ${String(f.op).toLowerCase()} ${labelValue}`,
-      onRemove: () => onDraftFiltersChange(removeFilterByKey(draftFilters, f.key)),
+      label,
+      onRemove: () =>
+        onDraftFiltersChange(removeFilterByKey(draftFilters, f.key)),
     });
   }
 
@@ -251,56 +255,162 @@ function buildAppliedFilters(
 }
 
 function FilterControl(props: {
-  def: FilterDef;
+  def: UiFilterDef;
   draftFilters: DraftFilter[];
   onDraftFiltersChange: (filters: DraftFilter[]) => void;
   fetchSuggestions: (key: string, q: string) => Promise<string[]>;
 }) {
   const { def, draftFilters, onDraftFiltersChange, fetchSuggestions } = props;
 
-  const current = draftFilters.find((f) => f.key === def.key) as DraftFilter | undefined;
+  const current = draftFilters.find((f) => f.key === def.key);
 
-  const op = current?.op ?? def.defaultOp;
-  const value = current?.value ?? (def.kind === "enum" ? (def.enumValues?.[0]?.value ?? "") : "");
+  const op: FilterOperator = (current?.op ??
+    def.operators[0]) as FilterOperator;
+  const value =
+    current?.value ?? (op === "BETWEEN" ? ["", ""] : defaultValueFor(def));
 
   const set = (patch: Partial<DraftFilter>) => {
     const next: DraftFilter = {
       id: current?.id ?? uid(),
       key: def.key,
-      op: (patch.op ?? op) as any,
-      value: patch.value ?? value,
-    } as any;
+      op: (patch.op ?? op) as FilterOperator,
+      value: normalizeValueForStorage(
+        def,
+        (patch.op ?? op) as FilterOperator,
+        patch.value ?? value,
+      ),
+    };
     onDraftFiltersChange(setFilter(draftFilters, next));
   };
 
-  // STATUS: single-select radios (exactly like Shopify Admin)
-  if (def.key === "product.status") {
-    const choices = (def.enumValues ?? []).map((x) => ({ label: x.label, value: x.value }));
+  // STATUS-style enum single select (Ablestar/Shopify Admin feel)
+  if (def.widget === "select" && def.key === "product.status") {
+    const choices = (def.enumValues ?? []).map((x) => ({
+      label: x.label,
+      value: x.value,
+    }));
     return (
       <ChoiceList
-        title="Status"
+        title={def.label}
         titleHidden
         choices={choices}
         selected={[String(value)]}
         onChange={(sel) => {
-          const v = sel?.[0] ?? "ACTIVE";
+          const v = sel?.[0] ?? def.enumValues?.[0]?.value ?? "";
           set({ op: "EQ", value: v });
         }}
       />
     );
   }
 
-  // DATE: operator + date input
-  if (def.kind === "date") {
+  // Operator select (most filters)
+  const opSelect =
+    def.operators.length > 1 ? (
+      <Select
+        label="Operator"
+        labelHidden
+        options={def.operators.map((o) => ({
+          label: OP_LABEL[o] ?? o,
+          value: o,
+        }))}
+        value={String(op)}
+        onChange={(v) => set({ op: v as FilterOperator })}
+      />
+    ) : null;
+
+  // IS_SET / IS_NOT_SET (no value input)
+  if (op === "IS_SET" || op === "IS_NOT_SET") {
     return (
       <BlockStack gap="200">
+        {opSelect}
+        <InlineStack gap="200" blockAlign="center">
+          <Badge tone="info">{op === "IS_SET" ? "Set" : "Not set"}</Badge>
+        </InlineStack>
+      </BlockStack>
+    );
+  }
+
+  // BETWEEN (2 inputs)
+  if (op === "BETWEEN") {
+    const a = String(value?.[0] ?? "");
+    const b = String(value?.[1] ?? "");
+    const inputType =
+      def.widget === "date"
+        ? "date"
+        : def.widget === "number"
+        ? "number"
+        : "text";
+
+    return (
+      <BlockStack gap="200">
+        {opSelect}
+        <InlineStack gap="200">
+          <TextField
+            label="From"
+            labelHidden
+            type={inputType as any}
+            value={a}
+            onChange={(v) => set({ value: [v, b] })}
+            autoComplete="off"
+            placeholder="From"
+          />
+          <TextField
+            label="To"
+            labelHidden
+            type={inputType as any}
+            value={b}
+            onChange={(v) => set({ value: [a, v] })}
+            autoComplete="off"
+            placeholder="To"
+          />
+        </InlineStack>
+      </BlockStack>
+    );
+  }
+
+  // BOOLEAN
+  if (def.widget === "boolean") {
+    return (
+      <BlockStack gap="200">
+        {opSelect /* usually EQ only */}
         <Select
-          label="Operator"
+          label="Value"
           labelHidden
-          options={def.ops.map((o) => ({ label: o, value: o }))}
-          value={String(op)}
-          onChange={(v) => set({ op: v as any })}
+          options={[
+            { label: "True", value: "true" },
+            { label: "False", value: "false" },
+          ]}
+          value={String(value)}
+          onChange={(v) => set({ value: v })}
         />
+      </BlockStack>
+    );
+  }
+
+  // ENUM select
+  if (def.widget === "select") {
+    return (
+      <BlockStack gap="200">
+        {opSelect}
+        <Select
+          label="Value"
+          labelHidden
+          options={(def.enumValues ?? []).map((x) => ({
+            label: x.label,
+            value: x.value,
+          }))}
+          value={String(value)}
+          onChange={(v) => set({ value: v })}
+        />
+      </BlockStack>
+    );
+  }
+
+  // DATE
+  if (def.widget === "date") {
+    return (
+      <BlockStack gap="200">
+        {opSelect}
         <TextField
           label="Date"
           labelHidden
@@ -313,17 +423,11 @@ function FilterControl(props: {
     );
   }
 
-  // NUMBER: operator + numeric field (simple)
-  if (def.kind === "number") {
+  // NUMBER
+  if (def.widget === "number") {
     return (
       <BlockStack gap="200">
-        <Select
-          label="Operator"
-          labelHidden
-          options={def.ops.map((o) => ({ label: o, value: o }))}
-          value={String(op)}
-          onChange={(v) => set({ op: v as any })}
-        />
+        {opSelect}
         <TextField
           label="Number"
           labelHidden
@@ -336,31 +440,51 @@ function FilterControl(props: {
     );
   }
 
-  // STRING w/ typeahead suggestions
-  if (def.kind === "string" && def.suggestion) {
+  // TEXTAREA (Description)
+  if (def.widget === "textarea") {
+    return (
+      <BlockStack gap="200">
+        {opSelect}
+        <TextField
+          label="Value"
+          labelHidden
+          multiline={4}
+          value={String(value ?? "")}
+          onChange={(v) => set({ value: v })}
+          autoComplete="off"
+        />
+      </BlockStack>
+    );
+  }
+
+  // TEXT with suggestions (only for a few keys)
+  const suggestionKeys = new Set<FilterKey>([
+    "product.vendor",
+    "product.productType",
+    "product.tag",
+    "product.title",
+    "product.handle",
+    "variant.sku",
+    "variant.barcode",
+  ]);
+
+  if (def.widget === "text" && suggestionKeys.has(def.key)) {
     return (
       <SuggestText
-        label={def.label}
         op={String(op)}
-        ops={def.ops}
+        ops={def.operators}
         value={String(value ?? "")}
-        onOpChange={(v) => set({ op: v as any })}
+        onOpChange={(v) => set({ op: v as FilterOperator })}
         onValueChange={(v) => set({ value: v })}
         fetchSuggestions={(q) => fetchSuggestions(def.key, q)}
       />
     );
   }
 
-  // STRING without suggestions
+  // TEXT fallback
   return (
     <BlockStack gap="200">
-      <Select
-        label="Operator"
-        labelHidden
-        options={def.ops.map((o) => ({ label: o, value: o }))}
-        value={String(op)}
-        onChange={(v) => set({ op: v as any })}
-      />
+      {opSelect}
       <TextField
         label="Value"
         labelHidden
@@ -373,9 +497,8 @@ function FilterControl(props: {
 }
 
 function SuggestText(props: {
-  label: string;
   op: string;
-  ops: string[];
+  ops: FilterOperator[];
   value: string;
   onOpChange: (v: string) => void;
   onValueChange: (v: string) => void;
@@ -416,12 +539,11 @@ function SuggestText(props: {
       <Select
         label="Operator"
         labelHidden
-        options={ops.map((o) => ({ label: o, value: o }))}
+        options={ops.map((o) => ({ label: OP_LABEL[o] ?? o, value: o }))}
         value={op}
         onChange={onOpChange}
       />
 
-      {/* This matches your screenshot behavior: type + click suggestion */}
       <BlockStack gap="100">
         <TextField
           label="Value"
@@ -431,13 +553,14 @@ function SuggestText(props: {
           autoComplete="off"
           placeholder={loading ? "Loading…" : "Start typing…"}
         />
+
         {options.length > 0 && (
           <div
             style={{
               border: "1px solid var(--p-color-border-secondary)",
-              borderRadius: 8,
+              borderRadius: 10,
               padding: 8,
-              maxHeight: 200,
+              maxHeight: 220,
               overflowY: "auto",
               background: "var(--p-color-bg-surface)",
             }}

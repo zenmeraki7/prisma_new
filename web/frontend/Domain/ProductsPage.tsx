@@ -16,27 +16,24 @@ export const ProductsPage: React.FC = () => {
   const [searchText, setSearchText] = React.useState("");
   const [draftFilters, setDraftFilters] = React.useState<DraftFilter[]>([]);
   const [appliedExpr, setAppliedExpr] = React.useState<FilterExpr | null>(null);
-
-  // Forces react-query to treat “applied” as new request and reset infinite pages
   const [requestKey, setRequestKey] = React.useState(0);
 
-  const buildExpr = React.useCallback((): FilterExpr | null => {
-    const leaves: FilterExpr[] = [];
+ const buildExpr = React.useCallback((): FilterExpr | null => {
+  const leaves: FilterExpr[] = [];
 
-    const s = searchText.trim();
-    if (s) {
-      // keep stable behavior: title contains
-      leaves.push(field("product.title" as any, "CONTAINS" as any, s));
-    }
+  const s = searchText.trim();
+  if (s) {
+    // ✅ multi-field search (handled by backend)
+    leaves.push(field("product.search" as any, "CONTAINS" as any, s));
+  }
 
-    for (const f of draftFilters) {
-      // IMPORTANT: pass the raw key/op/value exactly — backend normalizes
-      leaves.push(field(f.key as any, f.op as any, f.value));
-    }
+  for (const f of draftFilters) {
+    leaves.push(field(f.key as any, f.op as any, f.value));
+  }
 
-    if (leaves.length === 0) return null;
-    return andGroup(leaves);
-  }, [searchText, draftFilters]);
+  if (leaves.length === 0) return null;
+  return andGroup(leaves);
+}, [searchText, draftFilters]);
 
   const onApply = React.useCallback(() => {
     setAppliedExpr(buildExpr());
@@ -78,7 +75,6 @@ export const ProductsPage: React.FC = () => {
     loadingMore,
     error,
   } = useProductsByFilter({
-    // include requestKey so apply/reset always restarts pagination cleanly
     requestKey,
     filterExpr: appliedExpr,
     pageSize: 50,
@@ -134,9 +130,7 @@ export const ProductsPage: React.FC = () => {
           )}
 
           {loadingMore && items.length > 0 && (
-            <div style={{ paddingTop: 12, textAlign: "center" }}>
-              Loading more…
-            </div>
+            <div style={{ paddingTop: 12, textAlign: "center" }}>Loading more…</div>
           )}
         </Layout.Section>
       </Layout>

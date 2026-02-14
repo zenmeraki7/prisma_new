@@ -63,7 +63,7 @@ const PRODUCTS_BY_FILTER_QUERY = /* GraphQL */ `
 `;
 
 export interface UseProductsByFilterOptions {
-  requestKey?: number; // IMPORTANT: changes when Apply/Reset pressed
+  requestKey?: number;
   filterExpr: FilterExpr | null;
   snapshotRunId?: string | null;
   pageSize?: number;
@@ -73,7 +73,6 @@ export interface UseProductsByFilterOptions {
 export function useProductsByFilter(options: UseProductsByFilterOptions) {
   const { requestKey = 0, filterExpr, snapshotRunId, pageSize = 50, enabled = true } = options;
 
-  // Stable key: stringify filterExpr so the key changes only when content changes
   const filterKey = useMemo(() => JSON.stringify(filterExpr ?? null), [filterExpr]);
 
   const baseInput = useMemo(
@@ -99,11 +98,14 @@ export function useProductsByFilter(options: UseProductsByFilterOptions) {
       );
       return response.productsByFilter;
     },
-    placeholderData: (prev) => prev,
+
+    // ✅ IMPORTANT: remove placeholderData, otherwise UI keeps showing old filtered results
+    // placeholderData: (prev) => prev,
   });
 
-  const items: ProductLiteNode[] = query.data?.pages.flatMap((p) => p.items) ?? [];
-  const lastPage = query.data?.pages[query.data.pages.length - 1];
+  const pages = query.data?.pages ?? [];
+  const items: ProductLiteNode[] = pages.flatMap((p) => p.items);
+  const lastPage = pages.length ? pages[pages.length - 1] : undefined;
 
   return {
     items,
