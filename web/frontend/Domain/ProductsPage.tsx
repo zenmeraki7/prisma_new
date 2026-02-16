@@ -1,6 +1,8 @@
 // FILE: web/frontend/pages/ProductsPage.tsx
+
 import React from "react";
-import { Page, Layout, Card, BlockStack, Button } from "@shopify/polaris";
+import { Page, Layout, Card, BlockStack } from "@shopify/polaris";
+import { useAppBridge } from "@shopify/app-bridge-react";
 
 import type { FilterExpr } from "../lib/filters/dsl";
 import { andGroup, field } from "../lib/filters/dsl";
@@ -12,40 +14,73 @@ import { FilterExecutionAlert } from "../components/FilterExecutionAlert";
 import type { DraftFilter } from "../components/ProductsFilterBar";
 import { ProductsFilterBar } from "../components/ProductsFilterBar";
 
+import { useFastPlaneSync } from "../queries/syncProductsToDb";
+
 export const ProductsPage: React.FC = () => {
-  const [searchText, setSearchText] = React.useState("");
+  const app = useAppBridge();
+
   const [draftFilters, setDraftFilters] = React.useState<DraftFilter[]>([]);
+  const [searchText, setSearchText] = React.useState<string>("");
+
   const [appliedExpr, setAppliedExpr] = React.useState<FilterExpr | null>(null);
   const [requestKey, setRequestKey] = React.useState(0);
 
- const buildExpr = React.useCallback((): FilterExpr | null => {
-  const leaves: FilterExpr[] = [];
+  const buildExprFrom = React.useCallback(
+    (search: string, filters: DraftFilter[]): FilterExpr | null => {
+      const leaves: FilterExpr[] = [];
 
-  const s = searchText.trim();
-  if (s) {
-    // ✅ multi-field search (handled by backend)
-    leaves.push(field("product.search" as any, "CONTAINS" as any, s));
-  }
+      const s = (search ?? "").trim();
+      if (s) {
+        // ✅ backend expands product.search across title/vendor/handle/type/tags
+        leaves.push(field("product.search" as any, "CONTAINS" as any, s));
+      }
 
-  for (const f of draftFilters) {
-    leaves.push(field(f.key as any, f.op as any, f.value));
-  }
+      for (const f of Array.isArray(filters) ? filters : []) {
+        leaves.push(field(f.key as any, f.op as any, f.value));
+      }
 
-  if (leaves.length === 0) return null;
-  return andGroup(leaves);
-}, [searchText, draftFilters]);
+      return leaves.length ? andGroup(leaves) : null;
+    },
+    [],
+  );
 
-  const onApply = React.useCallback(() => {
-    setAppliedExpr(buildExpr());
+  /**
+   * ✅ SEARCH APPLY (single click)
+   * We accept nextSearch so we never read stale state.
+   */
+  const onApplySearch = React.useCallback(
+    (nextSearch: string) => {
+      setSearchText(nextSearch);
+      setAppliedExpr(buildExprFrom(nextSearch, draftFilters));
+      setRequestKey((x) => x + 1);
+    },
+    [buildExprFrom, draftFilters],
+  );
+
+  /**
+   * ✅ SEARCH RESET ONLY
+   */
+  const onResetSearchOnly = React.useCallback(() => {
+    const nextSearch = "";
+    setSearchText(nextSearch);
+    setAppliedExpr(buildExprFrom(nextSearch, draftFilters));
     setRequestKey((x) => x + 1);
-  }, [buildExpr]);
+  }, [buildExprFrom, draftFilters]);
 
-  const onReset = React.useCallback(() => {
-    setSearchText("");
-    setDraftFilters([]);
-    setAppliedExpr(null);
-    setRequestKey((x) => x + 1);
-  }, []);
+  /**
+   * ✅ FILTERS APPLY IMMEDIATELY
+   */
+  const onDraftFiltersChangeApplyNow = React.useCallback(
+    (next: DraftFilter[]) => {
+      const safe = Array.isArray(next) ? next : [];
+      setDraftFilters(safe);
+
+      // compute from NEXT filters (no stale)
+      setAppliedExpr(buildExprFrom(searchText, safe));
+      setRequestKey((x) => x + 1);
+    },
+    [buildExprFrom, searchText],
+  );
 
   const fetchSuggestions = React.useCallback(async (key: string, q: string) => {
     const resp = await fetch("/api/graphql", {
@@ -60,6 +95,8 @@ export const ProductsPage: React.FC = () => {
         variables: { input: { key, q, limit: 10 } },
       }),
     });
+
+    if (!resp.ok) return [];
     const json = await resp.json();
     return (json?.data?.filterSuggestions || []) as string[];
   }, []);
@@ -81,16 +118,19 @@ export const ProductsPage: React.FC = () => {
     enabled: true,
   });
 
+  const syncMutation = useFastPlaneSync(app as any);
+
   return (
     <Page
       title="Products"
       subtitle="Search, filter and bulk edit your catalog"
       fullWidth
-      primaryAction={
-        <Button variant="primary" disabled={loading} onClick={() => {}}>
-          Sync from Shopify
-        </Button>
-      }
+      primaryAction={{
+        content: "Sync from Shopify",
+        onAction: () => syncMutation.mutate(),
+        loading: syncMutation.isPending,
+        disabled: syncMutation.isPending || loading,
+      }}
     >
       <Layout>
         <Layout.Section>
@@ -98,13 +138,14 @@ export const ProductsPage: React.FC = () => {
             <ProductsFilterBar
               searchText={searchText}
               onSearchTextChange={setSearchText}
-              draftFilters={draftFilters}
-              onDraftFiltersChange={setDraftFilters}
-              onApply={onApply}
-              onReset={onReset}
+              onApplySearch={onApplySearch}
+              onResetSearch={onResetSearchOnly}
               loading={loading}
+              draftFilters={draftFilters}
+              onDraftFiltersChange={onDraftFiltersChangeApplyNow}
               fetchSuggestions={fetchSuggestions}
             />
+
             <div style={{ padding: 16 }}>
               <FilterExecutionAlert mode={mode} guardrail={guardrail} warnings={warnings} />
             </div>
@@ -125,7 +166,7 @@ export const ProductsPage: React.FC = () => {
               products={items}
               loading={loading && items.length === 0}
               hasNextPage={Boolean(hasNextPage)}
-              onLoadMore={loadMore}
+              onLoadMore={() => loadMore()}
             />
           )}
 

@@ -1,4 +1,5 @@
 // FILE: web/frontend/components/ProductsFilterBar.tsx
+
 import React from "react";
 import {
   Box,
@@ -12,11 +13,7 @@ import {
   Badge,
 } from "@shopify/polaris";
 
-import type {
-  UiFilterDef,
-  FilterKey,
-  FilterOperator,
-} from "../lib/filters/uiRegistry";
+import type { UiFilterDef, FilterKey, FilterOperator } from "../lib/filters/uiRegistry";
 import { UI_FILTERS, UI_FILTERS_BY_KEY } from "../lib/filters/uiRegistry";
 
 export type DraftFilter = {
@@ -30,23 +27,6 @@ function uid() {
   return Math.random().toString(16).slice(2) + Date.now().toString(16);
 }
 
-type Props = {
-  searchText: string;
-  onSearchTextChange: (v: string) => void;
-
-  draftFilters: DraftFilter[];
-  onDraftFiltersChange: (filters: DraftFilter[]) => void;
-
-  onApply: () => void;
-  onReset: () => void;
-
-  loading?: boolean;
-
-  // backend typeahead
-  fetchSuggestions: (key: string, q: string) => Promise<string[]>;
-};
-
-// ---- operator labels (Ablestar-ish) ----
 const OP_LABEL: Record<string, string> = {
   EQ: "is",
   NEQ: "is not",
@@ -65,20 +45,30 @@ const OP_LABEL: Record<string, string> = {
   IS_NOT_SET: "is not set",
 };
 
-function setFilter(
-  draftFilters: DraftFilter[],
-  patch: DraftFilter,
-): DraftFilter[] {
-  const idx = draftFilters.findIndex((f) => f.key === patch.key);
-  if (idx === -1) return [...draftFilters, patch];
-  const next = [...draftFilters];
-  next[idx] = { ...next[idx], ...patch };
-  return next;
-}
+type Props = {
+  /** applied search value (source of truth in parent) */
+  searchText: string;
 
-function removeFilterByKey(draftFilters: DraftFilter[], key: FilterKey) {
-  return draftFilters.filter((f) => f.key !== key);
-}
+  /** parent setter (kept for UI sync) */
+  onSearchTextChange: (v: string) => void;
+
+  /** filters are applied immediately (add/remove/clear all) */
+  draftFilters?: DraftFilter[];
+  onDraftFiltersChange: (filters: DraftFilter[]) => void;
+
+  /**
+   * ✅ Apply is SEARCH ONLY and must accept the new search value
+   * to avoid stale state + double click bug.
+   */
+  onApplySearch: (nextSearch: string) => void;
+
+  /** Reset is SEARCH ONLY */
+  onResetSearch: () => void;
+
+  loading?: boolean;
+
+  fetchSuggestions: (key: string, q: string) => Promise<string[]>;
+};
 
 function defFor(key: FilterKey): UiFilterDef {
   const d = UI_FILTERS_BY_KEY.get(key);
@@ -91,16 +81,10 @@ function defaultValueFor(def: UiFilterDef) {
   if (def.widget === "select") return def.enumValues?.[0]?.value ?? "";
   if (def.valueKind === "number") return "";
   if (def.valueKind === "date") return "";
-  if (def.valueKind === "text") return "";
   return "";
 }
 
-function normalizeValueForStorage(
-  def: UiFilterDef,
-  op: FilterOperator,
-  raw: any,
-) {
-  // Keep it simple: backend normalizes. But ensure BETWEEN uses [a,b].
+function normalizeValueForStorage(def: UiFilterDef, op: FilterOperator, raw: any) {
   if (op === "BETWEEN") {
     const a = raw?.[0] ?? "";
     const b = raw?.[1] ?? "";
@@ -109,53 +93,81 @@ function normalizeValueForStorage(
   return raw;
 }
 
+function isEffectivelyEmpty(def: UiFilterDef, op: FilterOperator, value: any) {
+  if (op === "IS_SET" || op === "IS_NOT_SET") return false;
+
+  if (op === "BETWEEN") {
+    const a = String(value?.[0] ?? "").trim();
+    const b = String(value?.[1] ?? "").trim();
+    return !a && !b;
+  }
+
+  const v = String(value ?? "").trim();
+  return v.length === 0;
+}
+
+function removeFilterByKey(filters: DraftFilter[], key: FilterKey) {
+  return filters.filter((f) => f.key !== key);
+}
+
 export const ProductsFilterBar: React.FC<Props> = ({
   searchText,
   onSearchTextChange,
   draftFilters,
   onDraftFiltersChange,
-  onApply,
-  onReset,
+  onApplySearch,
+  onResetSearch,
   loading,
   fetchSuggestions,
 }) => {
-  const hasAnyDraft =
-    searchText.trim().length > 0 ||
-    draftFilters.some((f) => {
-      if (f.op === "IS_SET" || f.op === "IS_NOT_SET") return true;
-      if (f.op === "BETWEEN") {
-        const a = String(f.value?.[0] ?? "").trim();
-        const b = String(f.value?.[1] ?? "").trim();
-        return a.length > 0 || b.length > 0;
-      }
-      return String(f.value ?? "").trim().length > 0;
-    });
+  const filtersArray: DraftFilter[] = Array.isArray(draftFilters) ? draftFilters : [];
 
-  const queryValue = searchText;
-  const onQueryChange = (v: string) => onSearchTextChange(v);
-  const onQueryClear = () => onSearchTextChange("");
+  // ✅ local typing state (draft)
+  const [searchDraft, setSearchDraft] = React.useState<string>(searchText ?? "");
 
-  // Build “Add filter” dropdown from UI_FILTERS (SSOT)
-  const filters = UI_FILTERS.map((d) => {
-    return {
-      key: d.key,
-      label: d.label,
-      filter: (
-        <FilterControl
-          def={d}
-          draftFilters={draftFilters}
-          onDraftFiltersChange={onDraftFiltersChange}
-          fetchSuggestions={fetchSuggestions}
-        />
-      ),
-      shortcut: false,
-    };
-  });
+  // ✅ keep draft in sync if parent changes applied search externally
+  React.useEffect(() => {
+    setSearchDraft(searchText ?? "");
+  }, [searchText]);
 
-  const appliedFilters = buildAppliedFilters(
-    draftFilters,
-    onDraftFiltersChange,
-  );
+  const applied = (searchText ?? "").trim();
+  const draft = (searchDraft ?? "").trim();
+  const searchDirty = draft !== applied;
+
+  // ✅ Apply SEARCH only (no stale state)
+  const applySearch = () => {
+    const nextSearch = draft;
+    onSearchTextChange(nextSearch);
+    onApplySearch(nextSearch);
+  };
+
+  // ✅ Reset SEARCH only
+  const resetSearch = () => {
+    setSearchDraft("");
+    onSearchTextChange("");
+    onResetSearch();
+  };
+
+  // ✅ Filters apply immediately (parent recomputes expr + refetch)
+  const applyFiltersNow = (next: DraftFilter[]) => {
+    onDraftFiltersChange(Array.isArray(next) ? next : []);
+  };
+
+  const filters = UI_FILTERS.map((d) => ({
+    key: d.key,
+    label: d.label,
+    filter: (
+      <FilterControl
+        def={d}
+        draftFilters={filtersArray}
+        onApplyFilters={applyFiltersNow}
+        fetchSuggestions={fetchSuggestions}
+      />
+    ),
+    shortcut: false,
+  }));
+
+  const appliedFilters = buildAppliedFilters(filtersArray, applyFiltersNow);
 
   return (
     <Box padding="400">
@@ -163,30 +175,31 @@ export const ProductsFilterBar: React.FC<Props> = ({
         <InlineStack gap="200" align="space-between" blockAlign="center">
           <div style={{ flex: 1 }}>
             <Filters
-              queryValue={queryValue}
+              queryValue={searchDraft}
               queryPlaceholder="Search title / vendor / handle / tag ..."
-              onQueryChange={onQueryChange}
-              onQueryClear={onQueryClear}
+              onQueryChange={setSearchDraft}
+              onQueryClear={() => setSearchDraft("")}
               filters={filters}
               appliedFilters={appliedFilters}
-              onClearAll={onReset} // ✅ THIS LINE
+              // ✅ Clear all clears FILTERS only
+              onClearAll={() => applyFiltersNow([])}
             />
           </div>
 
+          {/* ✅ Right side controls ONLY search */}
           <InlineStack gap="200" blockAlign="center">
             <Button
-              onClick={onReset}
-              disabled={
-                Boolean(loading) || (!hasAnyDraft && draftFilters.length === 0)
-              }
+              onClick={resetSearch}
+              disabled={Boolean(loading) || (!applied && !draft)}
             >
               Reset
             </Button>
+
             <Button
               variant="primary"
-              onClick={onApply}
+              onClick={applySearch}
               loading={Boolean(loading)}
-              disabled={Boolean(loading) || !hasAnyDraft}
+              disabled={Boolean(loading) || !searchDirty}
             >
               Apply
             </Button>
@@ -199,30 +212,18 @@ export const ProductsFilterBar: React.FC<Props> = ({
 
 function buildAppliedFilters(
   draftFilters: DraftFilter[],
-  onDraftFiltersChange: (f: DraftFilter[]) => void,
+  onApplyFilters: (next: DraftFilter[]) => void,
 ) {
   const applied: { key: string; label: string; onRemove: () => void }[] = [];
 
   for (const f of draftFilters) {
     const d = defFor(f.key);
-
-    // Skip empty values (except is_set/is_not_set)
-    if (f.op !== "IS_SET" && f.op !== "IS_NOT_SET") {
-      if (f.op === "BETWEEN") {
-        const a = String(f.value?.[0] ?? "").trim();
-        const b = String(f.value?.[1] ?? "").trim();
-        if (!a && !b) continue;
-      } else {
-        const v = String(f.value ?? "").trim();
-        if (!v) continue;
-      }
-    }
+    if (isEffectivelyEmpty(d, f.op, f.value)) continue;
 
     const opLabel = OP_LABEL[String(f.op)] ?? String(f.op).toLowerCase();
 
     let valueLabel = "";
-    if (f.op === "IS_SET") valueLabel = "";
-    else if (f.op === "IS_NOT_SET") valueLabel = "";
+    if (f.op === "IS_SET" || f.op === "IS_NOT_SET") valueLabel = "";
     else if (d.widget === "select") {
       const item = d.enumValues?.find((x) => x.value === f.value);
       valueLabel = item?.label ?? String(f.value ?? "");
@@ -246,8 +247,7 @@ function buildAppliedFilters(
     applied.push({
       key: f.key,
       label,
-      onRemove: () =>
-        onDraftFiltersChange(removeFilterByKey(draftFilters, f.key)),
+      onRemove: () => onApplyFilters(removeFilterByKey(draftFilters, f.key)),
     });
   }
 
@@ -257,68 +257,89 @@ function buildAppliedFilters(
 function FilterControl(props: {
   def: UiFilterDef;
   draftFilters: DraftFilter[];
-  onDraftFiltersChange: (filters: DraftFilter[]) => void;
+  onApplyFilters: (next: DraftFilter[]) => void;
   fetchSuggestions: (key: string, q: string) => Promise<string[]>;
 }) {
-  const { def, draftFilters, onDraftFiltersChange, fetchSuggestions } = props;
+  const { def, draftFilters, onApplyFilters, fetchSuggestions } = props;
 
-  const current = draftFilters.find((f) => f.key === def.key);
+  const existing = draftFilters.find((f) => f.key === def.key);
 
-  const op: FilterOperator = (current?.op ??
-    def.operators[0]) as FilterOperator;
-  const value =
-    current?.value ?? (op === "BETWEEN" ? ["", ""] : defaultValueFor(def));
+  const initialOp: FilterOperator = (existing?.op ?? def.operators[0]) as FilterOperator;
+  const initialValue =
+    existing?.value ?? (initialOp === "BETWEEN" ? ["", ""] : defaultValueFor(def));
 
-  const set = (patch: Partial<DraftFilter>) => {
-    const next: DraftFilter = {
-      id: current?.id ?? uid(),
-      key: def.key,
-      op: (patch.op ?? op) as FilterOperator,
-      value: normalizeValueForStorage(
-        def,
-        (patch.op ?? op) as FilterOperator,
-        patch.value ?? value,
-      ),
-    };
-    onDraftFiltersChange(setFilter(draftFilters, next));
+  // ✅ stable local draft
+  const [op, setOp] = React.useState<FilterOperator>(initialOp);
+  const [value, setValue] = React.useState<any>(initialValue);
+
+  React.useEffect(() => {
+    setOp(initialOp);
+    setValue(initialValue);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [def.key, existing?.id]);
+
+  const candidate: DraftFilter = {
+    id: existing?.id ?? uid(),
+    key: def.key,
+    op,
+    value: normalizeValueForStorage(def, op, value),
   };
 
-  // STATUS-style enum single select (Ablestar/Shopify Admin feel)
+  const commitDisabled = isEffectivelyEmpty(def, candidate.op, candidate.value);
+
+  const commit = () => {
+    const idx = draftFilters.findIndex((f) => f.key === candidate.key);
+    const next =
+      idx === -1
+        ? [...draftFilters, candidate]
+        : draftFilters.map((f, i) => (i === idx ? candidate : f));
+    onApplyFilters(next);
+  };
+
+  const clear = () => {
+    if (!existing) return;
+    onApplyFilters(removeFilterByKey(draftFilters, def.key));
+  };
+
+  // STATUS
   if (def.widget === "select" && def.key === "product.status") {
-    const choices = (def.enumValues ?? []).map((x) => ({
-      label: x.label,
-      value: x.value,
-    }));
+    const choices = (def.enumValues ?? []).map((x) => ({ label: x.label, value: x.value }));
     return (
-      <ChoiceList
-        title={def.label}
-        titleHidden
-        choices={choices}
-        selected={[String(value)]}
-        onChange={(sel) => {
-          const v = sel?.[0] ?? def.enumValues?.[0]?.value ?? "";
-          set({ op: "EQ", value: v });
-        }}
-      />
+      <BlockStack gap="200">
+        <ChoiceList
+          title={def.label}
+          titleHidden
+          choices={choices}
+          selected={[String(value ?? "")]}
+          onChange={(sel) => {
+            const v = sel?.[0] ?? def.enumValues?.[0]?.value ?? "";
+            setOp("EQ");
+            setValue(v);
+          }}
+        />
+        <InlineStack gap="200" align="end">
+          <Button onClick={clear} disabled={!existing}>
+            Clear
+          </Button>
+          <Button variant="primary" onClick={commit} disabled={commitDisabled}>
+            Add filter
+          </Button>
+        </InlineStack>
+      </BlockStack>
     );
   }
 
-  // Operator select (most filters)
   const opSelect =
     def.operators.length > 1 ? (
       <Select
         label="Operator"
         labelHidden
-        options={def.operators.map((o) => ({
-          label: OP_LABEL[o] ?? o,
-          value: o,
-        }))}
+        options={def.operators.map((o) => ({ label: OP_LABEL[o] ?? o, value: o }))}
         value={String(op)}
-        onChange={(v) => set({ op: v as FilterOperator })}
+        onChange={(v) => setOp(v as FilterOperator)}
       />
     ) : null;
 
-  // IS_SET / IS_NOT_SET (no value input)
   if (op === "IS_SET" || op === "IS_NOT_SET") {
     return (
       <BlockStack gap="200">
@@ -326,20 +347,22 @@ function FilterControl(props: {
         <InlineStack gap="200" blockAlign="center">
           <Badge tone="info">{op === "IS_SET" ? "Set" : "Not set"}</Badge>
         </InlineStack>
+        <InlineStack gap="200" align="end">
+          <Button onClick={clear} disabled={!existing}>
+            Clear
+          </Button>
+          <Button variant="primary" onClick={commit} disabled={commitDisabled}>
+            Add filter
+          </Button>
+        </InlineStack>
       </BlockStack>
     );
   }
 
-  // BETWEEN (2 inputs)
   if (op === "BETWEEN") {
     const a = String(value?.[0] ?? "");
     const b = String(value?.[1] ?? "");
-    const inputType =
-      def.widget === "date"
-        ? "date"
-        : def.widget === "number"
-        ? "number"
-        : "text";
+    const inputType = def.widget === "date" ? "date" : def.widget === "number" ? "number" : "text";
 
     return (
       <BlockStack gap="200">
@@ -350,7 +373,7 @@ function FilterControl(props: {
             labelHidden
             type={inputType as any}
             value={a}
-            onChange={(v) => set({ value: [v, b] })}
+            onChange={(v) => setValue([v, b])}
             autoComplete="off"
             placeholder="From"
           />
@@ -359,20 +382,27 @@ function FilterControl(props: {
             labelHidden
             type={inputType as any}
             value={b}
-            onChange={(v) => set({ value: [a, v] })}
+            onChange={(v) => setValue([a, v])}
             autoComplete="off"
             placeholder="To"
           />
+        </InlineStack>
+        <InlineStack gap="200" align="end">
+          <Button onClick={clear} disabled={!existing}>
+            Clear
+          </Button>
+          <Button variant="primary" onClick={commit} disabled={commitDisabled}>
+            Add filter
+          </Button>
         </InlineStack>
       </BlockStack>
     );
   }
 
-  // BOOLEAN
   if (def.widget === "boolean") {
     return (
       <BlockStack gap="200">
-        {opSelect /* usually EQ only */}
+        {opSelect}
         <Select
           label="Value"
           labelHidden
@@ -380,14 +410,21 @@ function FilterControl(props: {
             { label: "True", value: "true" },
             { label: "False", value: "false" },
           ]}
-          value={String(value)}
-          onChange={(v) => set({ value: v })}
+          value={String(value ?? "true")}
+          onChange={(v) => setValue(v)}
         />
+        <InlineStack gap="200" align="end">
+          <Button onClick={clear} disabled={!existing}>
+            Clear
+          </Button>
+          <Button variant="primary" onClick={commit} disabled={commitDisabled}>
+            Add filter
+          </Button>
+        </InlineStack>
       </BlockStack>
     );
   }
 
-  // ENUM select
   if (def.widget === "select") {
     return (
       <BlockStack gap="200">
@@ -395,18 +432,22 @@ function FilterControl(props: {
         <Select
           label="Value"
           labelHidden
-          options={(def.enumValues ?? []).map((x) => ({
-            label: x.label,
-            value: x.value,
-          }))}
-          value={String(value)}
-          onChange={(v) => set({ value: v })}
+          options={(def.enumValues ?? []).map((x) => ({ label: x.label, value: x.value }))}
+          value={String(value ?? "")}
+          onChange={(v) => setValue(v)}
         />
+        <InlineStack gap="200" align="end">
+          <Button onClick={clear} disabled={!existing}>
+            Clear
+          </Button>
+          <Button variant="primary" onClick={commit} disabled={commitDisabled}>
+            Add filter
+          </Button>
+        </InlineStack>
       </BlockStack>
     );
   }
 
-  // DATE
   if (def.widget === "date") {
     return (
       <BlockStack gap="200">
@@ -416,14 +457,21 @@ function FilterControl(props: {
           labelHidden
           type="date"
           value={String(value ?? "")}
-          onChange={(v) => set({ value: v })}
+          onChange={(v) => setValue(v)}
           autoComplete="off"
         />
+        <InlineStack gap="200" align="end">
+          <Button onClick={clear} disabled={!existing}>
+            Clear
+          </Button>
+          <Button variant="primary" onClick={commit} disabled={commitDisabled}>
+            Add filter
+          </Button>
+        </InlineStack>
       </BlockStack>
     );
   }
 
-  // NUMBER
   if (def.widget === "number") {
     return (
       <BlockStack gap="200">
@@ -433,31 +481,22 @@ function FilterControl(props: {
           labelHidden
           type="number"
           value={String(value ?? "")}
-          onChange={(v) => set({ value: v })}
+          onChange={(v) => setValue(v)}
           autoComplete="off"
         />
+        <InlineStack gap="200" align="end">
+          <Button onClick={clear} disabled={!existing}>
+            Clear
+          </Button>
+          <Button variant="primary" onClick={commit} disabled={commitDisabled}>
+            Add filter
+          </Button>
+        </InlineStack>
       </BlockStack>
     );
   }
 
-  // TEXTAREA (Description)
-  if (def.widget === "textarea") {
-    return (
-      <BlockStack gap="200">
-        {opSelect}
-        <TextField
-          label="Value"
-          labelHidden
-          multiline={4}
-          value={String(value ?? "")}
-          onChange={(v) => set({ value: v })}
-          autoComplete="off"
-        />
-      </BlockStack>
-    );
-  }
-
-  // TEXT with suggestions (only for a few keys)
+  // Suggest keys only
   const suggestionKeys = new Set<FilterKey>([
     "product.vendor",
     "product.productType",
@@ -471,17 +510,45 @@ function FilterControl(props: {
   if (def.widget === "text" && suggestionKeys.has(def.key)) {
     return (
       <SuggestText
-        op={String(op)}
+        op={op}
         ops={def.operators}
         value={String(value ?? "")}
-        onOpChange={(v) => set({ op: v as FilterOperator })}
-        onValueChange={(v) => set({ value: v })}
+        onOpChange={(v) => setOp(v as FilterOperator)}
+        onValueChange={(v) => setValue(v)}
         fetchSuggestions={(q) => fetchSuggestions(def.key, q)}
+        onClear={clear}
+        onCommit={commit}
+        commitDisabled={commitDisabled}
+        hasExisting={Boolean(existing)}
       />
     );
   }
 
-  // TEXT fallback
+  if (def.widget === "textarea") {
+    return (
+      <BlockStack gap="200">
+        {opSelect}
+        <TextField
+          label="Value"
+          labelHidden
+          multiline={4}
+          value={String(value ?? "")}
+          onChange={(v) => setValue(v)}
+          autoComplete="off"
+        />
+        <InlineStack gap="200" align="end">
+          <Button onClick={clear} disabled={!existing}>
+            Clear
+          </Button>
+          <Button variant="primary" onClick={commit} disabled={commitDisabled}>
+            Add filter
+          </Button>
+        </InlineStack>
+      </BlockStack>
+    );
+  }
+
+  // default text
   return (
     <BlockStack gap="200">
       {opSelect}
@@ -489,29 +556,51 @@ function FilterControl(props: {
         label="Value"
         labelHidden
         value={String(value ?? "")}
-        onChange={(v) => set({ value: v })}
+        onChange={(v) => setValue(v)}
         autoComplete="off"
       />
+      <InlineStack gap="200" align="end">
+        <Button onClick={clear} disabled={!existing}>
+          Clear
+        </Button>
+        <Button variant="primary" onClick={commit} disabled={commitDisabled}>
+          Add filter
+        </Button>
+      </InlineStack>
     </BlockStack>
   );
 }
 
 function SuggestText(props: {
-  op: string;
+  op: FilterOperator;
   ops: FilterOperator[];
   value: string;
   onOpChange: (v: string) => void;
   onValueChange: (v: string) => void;
   fetchSuggestions: (q: string) => Promise<string[]>;
+  onClear: () => void;
+  onCommit: () => void;
+  commitDisabled: boolean;
+  hasExisting: boolean;
 }) {
-  const { op, ops, value, onOpChange, onValueChange, fetchSuggestions } = props;
+  const {
+    op,
+    ops,
+    value,
+    onOpChange,
+    onValueChange,
+    fetchSuggestions,
+    onClear,
+    onCommit,
+    commitDisabled,
+    hasExisting,
+  } = props;
 
   const [options, setOptions] = React.useState<string[]>([]);
   const [loading, setLoading] = React.useState(false);
 
   React.useEffect(() => {
     let alive = true;
-
     async function run() {
       const q = value.trim();
       if (q.length < 2) {
@@ -527,7 +616,6 @@ function SuggestText(props: {
         if (alive) setLoading(false);
       }
     }
-
     run();
     return () => {
       alive = false;
@@ -540,45 +628,48 @@ function SuggestText(props: {
         label="Operator"
         labelHidden
         options={ops.map((o) => ({ label: OP_LABEL[o] ?? o, value: o }))}
-        value={op}
+        value={String(op)}
         onChange={onOpChange}
       />
 
-      <BlockStack gap="100">
-        <TextField
-          label="Value"
-          labelHidden
-          value={value}
-          onChange={onValueChange}
-          autoComplete="off"
-          placeholder={loading ? "Loading…" : "Start typing…"}
-        />
+      <TextField
+        label="Value"
+        labelHidden
+        value={value}
+        onChange={onValueChange}
+        autoComplete="off"
+        placeholder={loading ? "Loading…" : "Start typing…"}
+      />
 
-        {options.length > 0 && (
-          <div
-            style={{
-              border: "1px solid var(--p-color-border-secondary)",
-              borderRadius: 10,
-              padding: 8,
-              maxHeight: 220,
-              overflowY: "auto",
-              background: "var(--p-color-bg-surface)",
-            }}
-          >
-            <BlockStack gap="100">
-              {options.slice(0, 10).map((s) => (
-                <Button
-                  key={s}
-                  variant="plain"
-                  onClick={() => onValueChange(s)}
-                >
-                  {s}
-                </Button>
-              ))}
-            </BlockStack>
-          </div>
-        )}
-      </BlockStack>
+      {options.length > 0 && (
+        <div
+          style={{
+            border: "1px solid var(--p-color-border-secondary)",
+            borderRadius: 10,
+            padding: 8,
+            maxHeight: 220,
+            overflowY: "auto",
+            background: "var(--p-color-bg-surface)",
+          }}
+        >
+          <BlockStack gap="100">
+            {options.slice(0, 10).map((s) => (
+              <Button key={s} variant="plain" onClick={() => onValueChange(s)}>
+                {s}
+              </Button>
+            ))}
+          </BlockStack>
+        </div>
+      )}
+
+      <InlineStack gap="200" align="end">
+        <Button onClick={onClear} disabled={!hasExisting}>
+          Clear
+        </Button>
+        <Button variant="primary" onClick={onCommit} disabled={commitDisabled}>
+          Add filter
+        </Button>
+      </InlineStack>
     </BlockStack>
   );
 }
