@@ -1,4 +1,4 @@
-import { BrowserRouter } from "react-router-dom";
+import { BrowserRouter, Route } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { NavMenu } from "@shopify/app-bridge-react";
 import Routes from "./Routes";
@@ -19,29 +19,31 @@ export default function App() {
         <QueryProvider>
           <NavMenu>
             <a href="/" rel="home" />
+          
+            <Route path="/history/:id" element={<BulkJobDetailsPg />} />
 
             <a href="products">{t("NavigationMenu.Products")}</a>
             {/* <a href="filteredProductspage">{t("NavigationMenu.FilteredProductsPage")}</a> */}
             <a href="productsindexPage">{t("NavigationMenu.ProductsIndexPage")}</a>
             <a href="snapshotjobspage">{t("NavigationMenu.SnapshotJobsPage")}</a>
             <a href="/History">
-                {t("NavigationMenu.History")}
-              </a>
-              <a href="/Import">
-                {t("NavigationMenu.Import")}
-              </a>
-              <a href="/settings">
-                {t("NavigationMenu.Settings")}
-              </a>
-           <a href="/spreadsheetEdit">
-                {t("NavigationMenu.SpreadSheetEdit")}
-              </a>
-               <a href="/Export">
-                {t("NavigationMenu.Export")}
-              </a>
-                <a href="/snapshotRunsPage">
-                {t("NavigationMenu.SnapshotRunsPage")}
-              </a>
+              {t("NavigationMenu.History")}
+            </a>
+            <a href="/Import">
+              {t("NavigationMenu.Import")}
+            </a>
+            <a href="/settings">
+              {t("NavigationMenu.Settings")}
+            </a>
+            <a href="/spreadsheetEdit">
+              {t("NavigationMenu.SpreadSheetEdit")}
+            </a>
+            <a href="/Export">
+              {t("NavigationMenu.Export")}
+            </a>
+            <a href="/snapshotRunsPage">
+              {t("NavigationMenu.SnapshotRunsPage")}
+            </a>
           </NavMenu>
           <Routes pages={pages} />
         </QueryProvider>
