@@ -1,8 +1,9 @@
 // FILE: web/controllers/products/productFilterController.pg.js
 
+// FILE: web/controllers/products/productFilterController.pg.js
+
 import { pool } from "../../db/postgres/pool.js";
 import {
-  OPS,
   PRESET_KEYS,
   buildPresetFilterGroup,
   fetchProductsPage,

@@ -790,8 +790,11 @@ function collapseWhitespace(sql) {
     .filter(Boolean)
     .join(" ");
 }
+export { OPS, REGISTRY_BY_KEY };
 
 export default {
+  OPS,
+  REGISTRY_BY_KEY,
   SORT_DEFS,
   PRESET_KEYS,
   buildPresetFilterGroup,

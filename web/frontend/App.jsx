@@ -20,7 +20,7 @@ export default function App() {
           <NavMenu>
             <a href="/" rel="home" />
           
-            <Route path="/history/:id" element={<BulkJobDetailsPg />} />
+            {/* <Route path="/history/:id" element={<BulkJobDetailsPg />} /> */}
 
             <a href="products">{t("NavigationMenu.Products")}</a>
             {/* <a href="filteredProductspage">{t("NavigationMenu.FilteredProductsPage")}</a> */}
