@@ -38,8 +38,6 @@ async function testDbConnection() {
   }
 }
 
-
-
 /* ─────────────────────────────
    Helpers (reserved)
 ───────────────────────────── */
@@ -103,11 +101,7 @@ function normalizeLeaf(node) {
   if (!node || typeof node !== "object") return null;
 
   const filterId =
-    node.filterId ||
-    node.key ||
-    node.filterKey ||
-    node.field ||
-    node.path;
+    node.filterId || node.key || node.filterKey || node.field || node.path;
 
   const op = normalizeOp(node.op || node.operator);
   const value = node.value;
@@ -131,10 +125,14 @@ function normalizeToLeaves(expr, out) {
     return;
   }
 
-  if (Array.isArray(expr.and)) for (const c of expr.and) normalizeToLeaves(c, out);
-  if (Array.isArray(expr.AND)) for (const c of expr.AND) normalizeToLeaves(c, out);
-  if (Array.isArray(expr.or)) for (const c of expr.or) normalizeToLeaves(c, out);
-  if (Array.isArray(expr.OR)) for (const c of expr.OR) normalizeToLeaves(c, out);
+  if (Array.isArray(expr.and))
+    for (const c of expr.and) normalizeToLeaves(c, out);
+  if (Array.isArray(expr.AND))
+    for (const c of expr.AND) normalizeToLeaves(c, out);
+  if (Array.isArray(expr.or))
+    for (const c of expr.or) normalizeToLeaves(c, out);
+  if (Array.isArray(expr.OR))
+    for (const c of expr.OR) normalizeToLeaves(c, out);
 }
 
 /* ─────────────────────────────
@@ -192,7 +190,7 @@ app.post("/api/graphql", async (req, res) => {
 
     const client = new shopify.api.clients.Graphql({ session });
     const shopDomain = session.shop; // "my-shop.myshopify.com"
-    const shopId = shopDomain;       // Use this directly as ProductLite.shopId
+    const shopId = shopDomain; // Use this directly as ProductLite.shopId
 
     /* ────────────
        1) syncProductsToDb
@@ -272,9 +270,7 @@ app.post("/api/graphql", async (req, res) => {
       const pageInfo = response?.data?.products?.pageInfo;
       const hasNextPage = Boolean(pageInfo?.hasNextPage);
       const nextCursor =
-        hasNextPage && edges.length > 0
-          ? edges[edges.length - 1].cursor
-          : null;
+        hasNextPage && edges.length > 0 ? edges[edges.length - 1].cursor : null;
 
       return res.json({
         data: {
@@ -329,9 +325,7 @@ app.post("/api/graphql", async (req, res) => {
 
       const slice = products.slice(0, pageSize);
       const hasNextPage = products.length > pageSize;
-      const nextCursor = hasNextPage
-        ? slice[slice.length - 1].id
-        : null;
+      const nextCursor = hasNextPage ? slice[slice.length - 1].id : null;
 
       const items = slice.map((p) => ({
         id: p.id,
@@ -342,12 +336,8 @@ app.post("/api/graphql", async (req, res) => {
         productType: p.productType,
         tags: p.tags,
         hasImages: p.hasImages,
-        totalInventory: p.variantRollup
-          ? p.variantRollup.totalInventory
-          : 0,
-        variantCount: p.variantRollup
-          ? p.variantRollup.variantCount
-          : 0,
+        totalInventory: p.variantRollup ? p.variantRollup.totalInventory : 0,
+        variantCount: p.variantRollup ? p.variantRollup.variantCount : 0,
         updatedAtShopify: p.updatedAtShopify,
       }));
 
@@ -420,10 +410,7 @@ app.use("/*", shopify.ensureInstalledOnShop(), async (_req, res) => {
     .send(
       readFileSync(join(STATIC_PATH, "index.html"))
         .toString()
-        .replace(
-          "%VITE_SHOPIFY_API_KEY%",
-          process.env.SHOPIFY_API_KEY || "",
-        ),
+        .replace("%VITE_SHOPIFY_API_KEY%", process.env.SHOPIFY_API_KEY || ""),
     );
 });
 
