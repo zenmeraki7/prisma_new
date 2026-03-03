@@ -39,8 +39,9 @@ async function testDbConnection() {
 }
 
 /* ─────────────────────────────
-   Helpers (reserved)
+   Helpers
 ───────────────────────────── */
+
 function parseNumberInput(value) {
   const n = typeof value === "number" ? value : Number(value);
   return Number.isFinite(n) ? n : null;
@@ -54,8 +55,8 @@ function parseDateInput(value) {
 }
 
 /* ─────────────────────────────
-   Filter Normalization
-   (shared with FAST-plane filters)
+   Filter Normalization (FAST)
+   - shared with productsByFilter FAST plane
 ───────────────────────────── */
 
 const OP_MAP = new Map([
@@ -134,6 +135,267 @@ function normalizeToLeaves(expr, out) {
     for (const c of expr.or) normalizeToLeaves(c, out);
   if (Array.isArray(expr.OR))
     for (const c of expr.OR) normalizeToLeaves(c, out);
+}
+
+/**
+ * Build a Prisma `where` object for ProductLite from the FAST filterExpr.
+ *
+ * Supported filterIds (case-insensitive):
+ *
+ *   product.search
+ *   product.status, status, product_status
+ *   product.title, title, product_title
+ *   product.vendor, vendor, product_vendor
+ *   product.productType, product_type, producttype
+ *   product.tag, product.tags, tag, product_tag
+ *   product.createdAt
+ *   product.publishedAt
+ *   product.updatedAt
+ *
+ *   product.totalInventory, product.inventory_quantity, inventory_quantity
+ *   product.variantCount, product.variant_count, variant_count
+ *
+ * Everything else (SKU, barcode, etc.) is ignored on FAST plane.
+ */
+function buildProductLiteWhereFromFilterExpr(shopId, filterExpr) {
+  const andClauses = [{ shopId }];
+
+  if (!filterExpr) {
+    return andClauses.length === 1 ? andClauses[0] : { AND: andClauses };
+  }
+
+  const leaves = [];
+  normalizeToLeaves(filterExpr, leaves);
+
+  for (const leaf of leaves) {
+    const { filterId, op, value } = leaf;
+    if (!filterId || !op) continue;
+
+    const id = String(filterId).toLowerCase();
+    const opNorm = op; // already normalized by normalizeOp
+
+    // 1) product.search
+    if (id === "product.search") {
+      if (opNorm === "contains" && typeof value === "string") {
+        const v = value.trim();
+        if (v.length > 0) {
+          andClauses.push({
+            OR: [
+              { title: { contains: v, mode: "insensitive" } },
+              { vendor: { contains: v, mode: "insensitive" } },
+              { handle: { contains: v, mode: "insensitive" } },
+              { productType: { contains: v, mode: "insensitive" } },
+              { tags: { has: v } },
+            ],
+          });
+        }
+      }
+      continue;
+    }
+
+    // 2) product.status
+    if (id === "product.status" || id === "status" || id === "product_status") {
+      if (opNorm === "eq" && typeof value === "string") {
+        andClauses.push({
+          status: String(value).toUpperCase(),
+        });
+      } else if (opNorm === "in" && Array.isArray(value)) {
+        const vals = value
+          .filter((v) => typeof v === "string")
+          .map((v) => v.toUpperCase());
+        if (vals.length > 0) {
+          andClauses.push({
+            status: { in: vals },
+          });
+        }
+      }
+      continue;
+    }
+
+    // 3) product.title
+    if (id === "product.title" || id === "title" || id === "product_title") {
+      if (opNorm === "contains" && typeof value === "string") {
+        const v = value.trim();
+        if (v.length > 0) {
+          andClauses.push({
+            title: { contains: v, mode: "insensitive" },
+          });
+        }
+      }
+      continue;
+    }
+
+    // 4) product.vendor
+    if (id === "product.vendor" || id === "vendor" || id === "product_vendor") {
+      if (opNorm === "eq" && typeof value === "string") {
+        andClauses.push({ vendor: value });
+      } else if (opNorm === "contains" && typeof value === "string") {
+        const v = value.trim();
+        if (v.length > 0) {
+          andClauses.push({
+            vendor: { contains: v, mode: "insensitive" },
+          });
+        }
+      }
+      continue;
+    }
+
+    // 5) product.productType
+    if (
+      id === "product.producttype" ||
+      id === "product.product_type" ||
+      id === "producttype" ||
+      id === "product_type"
+    ) {
+      if (opNorm === "eq" && typeof value === "string") {
+        andClauses.push({ productType: value });
+      } else if (opNorm === "contains" && typeof value === "string") {
+        const v = value.trim();
+        if (v.length > 0) {
+          andClauses.push({
+            productType: { contains: v, mode: "insensitive" },
+          });
+        }
+      }
+      continue;
+    }
+
+    // 6) product.tag(s) → tags[]
+    if (id === "product.tag" || id === "product.tags" || id === "tag" || id === "product_tag") {
+      if (opNorm === "contains" && typeof value === "string") {
+        const v = value.trim();
+        if (v.length > 0) {
+          andClauses.push({
+            tags: { has: v },
+          });
+        }
+      } else if (opNorm === "in" && Array.isArray(value)) {
+        const vals = value
+          .filter((v) => typeof v === "string")
+          .map((v) => v.trim())
+          .filter((v) => v.length > 0);
+        if (vals.length > 0) {
+          andClauses.push({
+            tags: { hasSome: vals },
+          });
+        }
+      }
+      continue;
+    }
+
+    // 7) Dates: created / published / updated
+    if (id === "product.createdat") {
+      if ((opNorm === "gte" || opNorm === "gt") && typeof value === "string") {
+        const d = parseDateInput(value);
+        if (d) {
+          andClauses.push({
+            createdAtShopify: {
+              [opNorm === "gt" ? "gt" : "gte"]: d,
+            },
+          });
+        }
+      }
+      continue;
+    }
+
+    if (id === "product.publishedat") {
+      if ((opNorm === "gte" || opNorm === "gt") && typeof value === "string") {
+        const d = parseDateInput(value);
+        if (d) {
+          andClauses.push({
+            publishedAtShopify: {
+              [opNorm === "gt" ? "gt" : "gte"]: d,
+            },
+          });
+        }
+      }
+      continue;
+    }
+
+    if (id === "product.updatedat") {
+      if ((opNorm === "gte" || opNorm === "gt") && typeof value === "string") {
+        const d = parseDateInput(value);
+        if (d) {
+          andClauses.push({
+            updatedAtShopify: {
+              [opNorm === "gt" ? "gt" : "gte"]: d,
+            },
+          });
+        }
+      }
+      continue;
+    }
+
+    // 8) Inventory Quantity (rollup) → variantRollup.totalInventory
+    if (
+      id === "product.totalinventory" ||
+      id === "product.inventory_quantity" ||
+      id === "inventory_quantity"
+    ) {
+      const n = parseNumberInput(value);
+      if (n == null) continue;
+
+      if (opNorm === "gt" || opNorm === "gte") {
+        andClauses.push({
+          variantRollup: {
+            totalInventory: {
+              [opNorm === "gt" ? "gt" : "gte"]: n,
+            },
+          },
+        });
+      } else if (opNorm === "lt" || opNorm === "lte") {
+        andClauses.push({
+          variantRollup: {
+            totalInventory: {
+              [opNorm === "lt" ? "lt" : "lte"]: n,
+            },
+          },
+        });
+      } else if (opNorm === "eq") {
+        andClauses.push({
+          variantRollup: { totalInventory: n },
+        });
+      }
+      continue;
+    }
+
+    // 9) Variant Count → variantRollup.variantCount
+    if (
+      id === "product.variantcount" ||
+      id === "product.variant_count" ||
+      id === "variant_count"
+    ) {
+      const n = parseNumberInput(value);
+      if (n == null) continue;
+
+      if (opNorm === "gt" || opNorm === "gte") {
+        andClauses.push({
+          variantRollup: {
+            variantCount: {
+              [opNorm === "gt" ? "gt" : "gte"]: n,
+            },
+          },
+        });
+      } else if (opNorm === "lt" || opNorm === "lte") {
+        andClauses.push({
+          variantRollup: {
+            variantCount: {
+              [opNorm === "lt" ? "lt" : "lte"]: n,
+            },
+          },
+        });
+      } else if (opNorm === "eq") {
+        andClauses.push({
+          variantRollup: { variantCount: n },
+        });
+      }
+      continue;
+    }
+
+    // 10) Unsupported ids for FAST plane → ignore (SKU, barcode, etc.)
+  }
+
+  return andClauses.length === 1 ? andClauses[0] : { AND: andClauses };
 }
 
 /* ─────────────────────────────
@@ -234,7 +496,6 @@ app.post("/api/graphql", async (req, res) => {
         const p = edge.node;
 
         await prisma.productLite.upsert({
-          // ProductLite has @@unique([shopId, id]) → unique input name: shopId_id
           where: {
             shopId_id: {
               shopId,
@@ -287,229 +548,17 @@ app.post("/api/graphql", async (req, res) => {
     /* ────────────
        2) productsByFilter (FAST plane via Prisma)
        Uses ProductLite + VariantRollup
-       Keys are aligned to FILTERS_CONFIG + product.search.
        ──────────── */
     if (query.includes("productsByFilter")) {
       const input = variables?.input ?? {};
       const first = Number(input.first ?? 50);
       const after = input.after ?? null;
 
-      // FE sends filterExpr as "filter"
       const filterExpr = input.filter ?? input.filterExpr ?? input.filterGroup ?? null;
-
       const pageSize = Math.min(Math.max(first, 1), 250);
 
-      // Always scope by shopId
-      const andClauses = [{ shopId }];
+      const where = buildProductLiteWhereFromFilterExpr(shopId, filterExpr);
 
-      if (filterExpr) {
-        const leaves = [];
-        normalizeToLeaves(filterExpr, leaves);
-
-        // Uncomment to inspect what FE sends:
-        // console.log("FILTER LEAVES:", JSON.stringify(leaves, null, 2));
-
-        for (const leaf of leaves) {
-          const { filterId, op, value } = leaf;
-          if (!filterId || !op) continue;
-
-          const id = String(filterId).toLowerCase();
-          const opNorm = op; // already normalized by normalizeOp
-
-          // ─────────────────────────────
-          // product.search
-          // Synthetic search over title/vendor/handle/productType/tags
-          // ─────────────────────────────
-          if (id === "product.search") {
-            if (opNorm === "contains" && typeof value === "string") {
-              const v = value.trim();
-              if (v.length > 0) {
-                andClauses.push({
-                  OR: [
-                    { title: { contains: v, mode: "insensitive" } },
-                    { vendor: { contains: v, mode: "insensitive" } },
-                    { handle: { contains: v, mode: "insensitive" } },
-                    { productType: { contains: v, mode: "insensitive" } },
-                    { tags: { has: v } },
-                  ],
-                });
-              }
-            }
-            continue;
-          }
-
-          // ─────────────────────────────
-          // product.status
-          // ─────────────────────────────
-          if (id === "product.status" || id === "status" || id === "product_status") {
-            if (opNorm === "eq" && typeof value === "string") {
-              andClauses.push({
-                status: String(value).toUpperCase(),
-              });
-            } else if (opNorm === "in" && Array.isArray(value)) {
-              const vals = value
-                .filter((v) => typeof v === "string")
-                .map((v) => v.toUpperCase());
-              if (vals.length > 0) {
-                andClauses.push({
-                  status: { in: vals },
-                });
-              }
-            }
-            continue;
-          }
-
-          // ─────────────────────────────
-          // product.title
-          // ─────────────────────────────
-          if (id === "product.title" || id === "title" || id === "product_title") {
-            if (opNorm === "contains" && typeof value === "string") {
-              const v = value.trim();
-              if (v.length > 0) {
-                andClauses.push({
-                  title: { contains: v, mode: "insensitive" },
-                });
-              }
-            }
-            continue;
-          }
-
-          // ─────────────────────────────
-          // product.vendor
-          // ─────────────────────────────
-          if (id === "product.vendor" || id === "vendor" || id === "product_vendor") {
-            if (opNorm === "eq" && typeof value === "string") {
-              andClauses.push({ vendor: value });
-            } else if (opNorm === "contains" && typeof value === "string") {
-              const v = value.trim();
-              if (v.length > 0) {
-                andClauses.push({
-                  vendor: { contains: v, mode: "insensitive" },
-                });
-              }
-            }
-            continue;
-          }
-
-          // ─────────────────────────────
-          // product.productType
-          // ─────────────────────────────
-          if (
-            id === "product.producttype" ||
-            id === "product.product_type" ||
-            id === "product.product_type" ||
-            id === "product.producttype" ||
-            id === "product.producttype" ||
-            id === "product.product_type" ||
-            id === "product.producttype" ||
-            id === "product.producttype" ||
-            id === "product.producttype" ||
-            id === "product.producttype" ||
-            id === "product.producttype" ||
-            id === "product.producttype" ||
-            id === "product.producttype" ||
-            id === "product.producttype" ||
-            id === "product.producttype" ||
-            id === "product.producttype" ||
-            id === "product.producttype"
-          ) {
-            // (Above line is intentionally repetitive-safe; you can simplify)
-          }
-
-          if (id === "product.producttype" || id === "product.product_type" || id === "producttype" || id === "product_type") {
-            if (opNorm === "eq" && typeof value === "string") {
-              andClauses.push({ productType: value });
-            } else if (opNorm === "contains" && typeof value === "string") {
-              const v = value.trim();
-              if (v.length > 0) {
-                andClauses.push({
-                  productType: { contains: v, mode: "insensitive" },
-                });
-              }
-            }
-            continue;
-          }
-
-          // ─────────────────────────────
-          // product.tag(s) → tags[]
-          // ─────────────────────────────
-          if (id === "product.tag" || id === "product.tags" || id === "tag" || id === "product_tag") {
-            if (opNorm === "contains" && typeof value === "string") {
-              const v = value.trim();
-              if (v.length > 0) {
-                andClauses.push({
-                  tags: { has: v },
-                });
-              }
-            } else if (opNorm === "in" && Array.isArray(value)) {
-              const vals = value
-                .filter((v) => typeof v === "string")
-                .map((v) => v.trim())
-                .filter((v) => v.length > 0);
-              if (vals.length > 0) {
-                andClauses.push({
-                  tags: { hasSome: vals },
-                });
-              }
-            }
-            continue;
-          }
-
-          // ─────────────────────────────
-          // product.createdAt / publishedAt / updatedAt
-          // Map to *_Shopify fields on ProductLite
-          // Using gte for "since" semantics
-          // ─────────────────────────────
-          if (id === "product.createdat") {
-            if ((opNorm === "gte" || opNorm === "gt") && typeof value === "string") {
-              const d = new Date(value);
-              if (!Number.isNaN(d.getTime())) {
-                andClauses.push({
-                  createdAtShopify: {
-                    gte: d,
-                  },
-                });
-              }
-            }
-            continue;
-          }
-
-          if (id === "product.publishedat") {
-            if ((opNorm === "gte" || opNorm === "gt") && typeof value === "string") {
-              const d = new Date(value);
-              if (!Number.isNaN(d.getTime())) {
-                andClauses.push({
-                  publishedAtShopify: {
-                    gte: d,
-                  },
-                });
-              }
-            }
-            continue;
-          }
-
-          if (id === "product.updatedat") {
-            if ((opNorm === "gte" || opNorm === "gt") && typeof value === "string") {
-              const d = new Date(value);
-              if (!Number.isNaN(d.getTime())) {
-                andClauses.push({
-                  updatedAtShopify: {
-                    gte: d,
-                  },
-                });
-              }
-            }
-            continue;
-          }
-
-          // Unknown filterId → ignore for FAST plane
-        }
-      }
-
-      const where =
-        andClauses.length === 1 ? andClauses[0] : { AND: andClauses };
-
-      // Cursor-based pagination on compound unique (shopId, id)
       const cursor =
         after != null
           ? { shopId_id: { shopId, id: String(after) } }
@@ -518,15 +567,15 @@ app.post("/api/graphql", async (req, res) => {
       const products = await prisma.productLite.findMany({
         where,
         include: {
-          variantRollup: true, // join for totalInventory + variantCount
+          variantRollup: true,
         },
         orderBy: {
           updatedAtShopify: "desc",
         },
-        take: pageSize + 1, // +1 for sentinel
+        take: pageSize + 1,
         ...(cursor
           ? {
-              skip: 1, // skip the cursor row itself
+              skip: 1,
               cursor,
             }
           : {}),
@@ -561,7 +610,7 @@ app.post("/api/graphql", async (req, res) => {
           productsByFilter: {
             items,
             nextCursor,
-            mode: "FAST", // FAST plane only for now
+            mode: "FAST",
             guardrail,
             warnings: [],
           },

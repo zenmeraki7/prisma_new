@@ -10,7 +10,7 @@ export type FilterOperator =
   | "IS_SET" | "IS_NOT_SET";
 
 export type FilterKey =
-  // Product
+  // ─────────────── Product filters ───────────────
   | "product.category"
   | "product.collection"
   | "product.createdAt"
@@ -33,7 +33,7 @@ export type FilterKey =
   | "product.vendor"
   | "product.visibleOnlineStore"
   | "product.visiblePos"
-  // Variant
+  // ─────────────── Variant filters ───────────────
   | "variant.barcode"
   | "variant.chargeTax"
   | "variant.compareAtPrice"
@@ -72,21 +72,119 @@ export interface UiFilterDef {
   enumValues?: EnumValue[];
 }
 
+/**
+ * Canonical UI filter definitions.
+ *
+ * These keys (product.* / variant.*) must match:
+ *  - FilterKey union above
+ *  - KEY_TO_OPS mapping in dsl.ts
+ */
 export const UI_FILTERS: UiFilterDef[] = [
   // ─────────────── Product fields ───────────────
-  { key: "product.category", label: "Category", scope: "product", valueKind: "string", widget: "text", operators: ["CONTAINS", "EQ"] },
-  { key: "product.collection", label: "Collection", scope: "product", valueKind: "string", widget: "text", operators: ["CONTAINS", "EQ"] },
-  { key: "product.createdAt", label: "Date Created", scope: "product", valueKind: "date", widget: "date", operators: ["GTE", "LTE", "BETWEEN"] },
-  { key: "product.publishedAt", label: "Date Published", scope: "product", valueKind: "date", widget: "date", operators: ["GTE", "LTE", "BETWEEN"] },
-  { key: "product.updatedAt", label: "Date Updated", scope: "product", valueKind: "date", widget: "date", operators: ["GTE", "LTE", "BETWEEN"] },
-  { key: "product.description", label: "Description", scope: "product", valueKind: "text", widget: "textarea", operators: ["CONTAINS"] },
-  { key: "product.handle", label: "Handle (URL)", scope: "product", valueKind: "string", widget: "text", operators: ["CONTAINS", "EQ"] },
-  { key: "product.inventoryQuantity", label: "Inventory Quantity", scope: "product", valueKind: "number", widget: "number", operators: ["GTE", "LTE", "BETWEEN", "EQ"] },
-  { key: "product.option1Name", label: "Option 1 Name", scope: "product", valueKind: "string", widget: "text", operators: ["CONTAINS", "EQ"] },
-  { key: "product.option2Name", label: "Option 2 Name", scope: "product", valueKind: "string", widget: "text", operators: ["CONTAINS", "EQ"] },
-  { key: "product.option3Name", label: "Option 3 Name", scope: "product", valueKind: "string", widget: "text", operators: ["CONTAINS", "EQ"] },
-  { key: "product.id", label: "Product ID", scope: "product", valueKind: "string", widget: "text", operators: ["EQ", "CONTAINS"] },
-  { key: "product.productType", label: "Product Type (Custom)", scope: "product", valueKind: "string", widget: "text", operators: ["CONTAINS", "EQ", "IN"] },
+  {
+    key: "product.category",
+    label: "Category",
+    scope: "product",
+    valueKind: "string",
+    widget: "text",
+    operators: ["CONTAINS", "EQ"],
+  },
+  {
+    key: "product.collection",
+    label: "Collection",
+    scope: "product",
+    valueKind: "string",
+    widget: "text",
+    operators: ["CONTAINS", "EQ"],
+  },
+  {
+    key: "product.createdAt",
+    label: "Date Created",
+    scope: "product",
+    valueKind: "date",
+    widget: "date",
+    operators: ["GTE", "LTE", "BETWEEN"],
+  },
+  {
+    key: "product.publishedAt",
+    label: "Date Published",
+    scope: "product",
+    valueKind: "date",
+    widget: "date",
+    operators: ["GTE", "LTE", "BETWEEN"],
+  },
+  {
+    key: "product.updatedAt",
+    label: "Date Updated",
+    scope: "product",
+    valueKind: "date",
+    widget: "date",
+    operators: ["GTE", "LTE", "BETWEEN"],
+  },
+  {
+    key: "product.description",
+    label: "Description",
+    scope: "product",
+    valueKind: "text",
+    widget: "textarea",
+    operators: ["CONTAINS"],
+  },
+  {
+    key: "product.handle",
+    label: "Handle (URL)",
+    scope: "product",
+    valueKind: "string",
+    widget: "text",
+    operators: ["CONTAINS", "EQ"],
+  },
+  {
+    key: "product.inventoryQuantity",
+    label: "Inventory Quantity",
+    scope: "product",
+    valueKind: "number",
+    widget: "number",
+    operators: ["GTE", "LTE", "BETWEEN", "EQ"],
+  },
+  {
+    key: "product.option1Name",
+    label: "Option 1 Name",
+    scope: "product",
+    valueKind: "string",
+    widget: "text",
+    operators: ["CONTAINS", "EQ"],
+  },
+  {
+    key: "product.option2Name",
+    label: "Option 2 Name",
+    scope: "product",
+    valueKind: "string",
+    widget: "text",
+    operators: ["CONTAINS", "EQ"],
+  },
+  {
+    key: "product.option3Name",
+    label: "Option 3 Name",
+    scope: "product",
+    valueKind: "string",
+    widget: "text",
+    operators: ["CONTAINS", "EQ"],
+  },
+  {
+    key: "product.id",
+    label: "Product ID",
+    scope: "product",
+    valueKind: "string",
+    widget: "text",
+    operators: ["EQ", "CONTAINS"],
+  },
+  {
+    key: "product.productType",
+    label: "Product Type (Custom)",
+    scope: "product",
+    valueKind: "string",
+    widget: "text",
+    operators: ["CONTAINS", "EQ", "IN"],
+  },
 
   {
     key: "product.searchEngineVisibility",
@@ -115,22 +213,120 @@ export const UI_FILTERS: UiFilterDef[] = [
     ],
   },
 
-  { key: "product.tag", label: "Tag", scope: "product", valueKind: "string", widget: "text", operators: ["CONTAINS", "EQ", "IN"] },
-  { key: "product.template", label: "Theme Template", scope: "product", valueKind: "string", widget: "text", operators: ["CONTAINS", "EQ"] },
-  { key: "product.title", label: "Title", scope: "product", valueKind: "text", widget: "text", operators: ["CONTAINS", "STARTS_WITH", "EQ"] },
-  { key: "product.variantCount", label: "Variant Count", scope: "product", valueKind: "number", widget: "number", operators: ["GTE", "LTE", "BETWEEN", "EQ"] },
-  { key: "product.vendor", label: "Vendor", scope: "product", valueKind: "string", widget: "text", operators: ["CONTAINS", "EQ", "IN"] },
-  { key: "product.visibleOnlineStore", label: "Visible on Online Store (web)", scope: "product", valueKind: "boolean", widget: "boolean", operators: ["EQ"] },
-  { key: "product.visiblePos", label: "Visible on Point of Sale (POS)", scope: "product", valueKind: "boolean", widget: "boolean", operators: ["EQ"] },
+  {
+    key: "product.tag",
+    label: "Tag",
+    scope: "product",
+    valueKind: "string",
+    widget: "text",
+    operators: ["CONTAINS", "EQ", "IN"],
+  },
+  {
+    key: "product.template",
+    label: "Theme Template",
+    scope: "product",
+    valueKind: "string",
+    widget: "text",
+    operators: ["CONTAINS", "EQ"],
+  },
+  {
+    key: "product.title",
+    label: "Title",
+    scope: "product",
+    valueKind: "text",
+    widget: "text",
+    operators: ["CONTAINS", "STARTS_WITH", "EQ"],
+  },
+  {
+    key: "product.variantCount",
+    label: "Variant Count",
+    scope: "product",
+    valueKind: "number",
+    widget: "number",
+    operators: ["GTE", "LTE", "BETWEEN", "EQ"],
+  },
+  {
+    key: "product.vendor",
+    label: "Vendor",
+    scope: "product",
+    valueKind: "string",
+    widget: "text",
+    operators: ["CONTAINS", "EQ", "IN"],
+  },
+  {
+    key: "product.visibleOnlineStore",
+    label: "Visible on Online Store (web)",
+    scope: "product",
+    valueKind: "boolean",
+    widget: "boolean",
+    operators: ["EQ"],
+  },
+  {
+    key: "product.visiblePos",
+    label: "Visible on Point of Sale (POS)",
+    scope: "product",
+    valueKind: "boolean",
+    widget: "boolean",
+    operators: ["EQ"],
+  },
 
   // ─────────────── Variant fields ───────────────
-  { key: "variant.barcode", label: "Barcode (ISBN, UPC, GTIN, etc.)", scope: "variant", valueKind: "string", widget: "text", operators: ["CONTAINS", "EQ"] },
-  { key: "variant.chargeTax", label: "Charge tax on this product", scope: "variant", valueKind: "boolean", widget: "boolean", operators: ["EQ"] },
-  { key: "variant.compareAtPrice", label: "Compare-at Price", scope: "variant", valueKind: "number", widget: "number", operators: ["GTE", "LTE", "BETWEEN", "EQ"] },
-  { key: "variant.inventoryLocation", label: "Connected Inventory Location", scope: "variant", valueKind: "string", widget: "text", operators: ["CONTAINS", "EQ"] },
-  { key: "variant.cost", label: "Cost", scope: "variant", valueKind: "number", widget: "number", operators: ["GTE", "LTE", "BETWEEN", "EQ"] },
-  { key: "variant.countryOfOrigin", label: "Country of Origin", scope: "variant", valueKind: "string", widget: "text", operators: ["CONTAINS", "EQ"] },
-  { key: "variant.hsTariffCode", label: "HS Tariff Code", scope: "variant", valueKind: "string", widget: "text", operators: ["CONTAINS", "EQ"] },
+  {
+    key: "variant.barcode",
+    label: "Barcode (ISBN, UPC, GTIN, etc.)",
+    scope: "variant",
+    valueKind: "string",
+    widget: "text",
+    operators: ["CONTAINS", "EQ"],
+  },
+  {
+    key: "variant.chargeTax",
+    label: "Charge tax on this product",
+    scope: "variant",
+    valueKind: "boolean",
+    widget: "boolean",
+    operators: ["EQ"],
+  },
+  {
+    key: "variant.compareAtPrice",
+    label: "Compare-at Price",
+    scope: "variant",
+    valueKind: "number",
+    widget: "number",
+    operators: ["GTE", "LTE", "BETWEEN", "EQ"],
+  },
+  {
+    key: "variant.inventoryLocation",
+    label: "Connected Inventory Location",
+    scope: "variant",
+    valueKind: "string",
+    widget: "text",
+    operators: ["CONTAINS", "EQ"],
+  },
+  {
+    key: "variant.cost",
+    label: "Cost",
+    scope: "variant",
+    valueKind: "number",
+    widget: "number",
+    operators: ["GTE", "LTE", "BETWEEN", "EQ"],
+  },
+  {
+    key: "variant.countryOfOrigin",
+    label: "Country of Origin",
+    scope: "variant",
+    valueKind: "string",
+    widget: "text",
+    operators: ["CONTAINS", "EQ"],
+  },
+  {
+    key: "variant.hsTariffCode",
+    label: "HS Tariff Code",
+    scope: "variant",
+    valueKind: "string",
+    widget: "text",
+    operators: ["CONTAINS", "EQ"],
+  },
 
   {
     key: "variant.inventoryPolicy",
@@ -145,17 +341,94 @@ export const UI_FILTERS: UiFilterDef[] = [
     ],
   },
 
-  { key: "variant.option1Value", label: "Option 1 Value", scope: "variant", valueKind: "string", widget: "text", operators: ["CONTAINS", "EQ"] },
-  { key: "variant.option2Value", label: "Option 2 Value", scope: "variant", valueKind: "string", widget: "text", operators: ["CONTAINS", "EQ"] },
-  { key: "variant.option3Value", label: "Option 3 Value", scope: "variant", valueKind: "string", widget: "text", operators: ["CONTAINS", "EQ"] },
-  { key: "variant.physicalProduct", label: "Physical Product", scope: "variant", valueKind: "boolean", widget: "boolean", operators: ["EQ"] },
-  { key: "variant.price", label: "Price", scope: "variant", valueKind: "number", widget: "number", operators: ["GTE", "LTE", "BETWEEN", "EQ"] },
-  { key: "variant.profitMargin", label: "Profit Margin", scope: "variant", valueKind: "number", widget: "number", operators: ["GTE", "LTE", "BETWEEN", "EQ"] },
-  { key: "variant.sku", label: "SKU", scope: "variant", valueKind: "string", widget: "text", operators: ["CONTAINS", "EQ"] },
-  { key: "variant.trackQuantity", label: "Track Quantity", scope: "variant", valueKind: "boolean", widget: "boolean", operators: ["EQ"] },
-  { key: "variant.inventoryQuantity", label: "Variant Inventory Quantity", scope: "variant", valueKind: "number", widget: "number", operators: ["GTE", "LTE", "BETWEEN", "EQ"] },
-  { key: "variant.title", label: "Variant Title", scope: "variant", valueKind: "string", widget: "text", operators: ["CONTAINS", "EQ"] },
-  { key: "variant.weight", label: "Weight", scope: "variant", valueKind: "number", widget: "number", operators: ["GTE", "LTE", "BETWEEN", "EQ"] },
+  {
+    key: "variant.option1Value",
+    label: "Option 1 Value",
+    scope: "variant",
+    valueKind: "string",
+    widget: "text",
+    operators: ["CONTAINS", "EQ"],
+  },
+  {
+    key: "variant.option2Value",
+    label: "Option 2 Value",
+    scope: "variant",
+    valueKind: "string",
+    widget: "text",
+    operators: ["CONTAINS", "EQ"],
+  },
+  {
+    key: "variant.option3Value",
+    label: "Option 3 Value",
+    scope: "variant",
+    valueKind: "string",
+    widget: "text",
+    operators: ["CONTAINS", "EQ"],
+  },
+  {
+    key: "variant.physicalProduct",
+    label: "Physical Product",
+    scope: "variant",
+    valueKind: "boolean",
+    widget: "boolean",
+    operators: ["EQ"],
+  },
+  {
+    key: "variant.price",
+    label: "Price",
+    scope: "variant",
+    valueKind: "number",
+    widget: "number",
+    operators: ["GTE", "LTE", "BETWEEN", "EQ"],
+  },
+  {
+    key: "variant.profitMargin",
+    label: "Profit Margin",
+    scope: "variant",
+    valueKind: "number",
+    widget: "number",
+    operators: ["GTE", "LTE", "BETWEEN", "EQ"],
+  },
+  {
+    key: "variant.sku",
+    label: "SKU",
+    scope: "variant",
+    valueKind: "string",
+    widget: "text",
+    operators: ["CONTAINS", "EQ"],
+  },
+  {
+    key: "variant.trackQuantity",
+    label: "Track Quantity",
+    scope: "variant",
+    valueKind: "boolean",
+    widget: "boolean",
+    operators: ["EQ"],
+  },
+  {
+    key: "variant.inventoryQuantity",
+    label: "Variant Inventory Quantity",
+    scope: "variant",
+    valueKind: "number",
+    widget: "number",
+    operators: ["GTE", "LTE", "BETWEEN", "EQ"],
+  },
+  {
+    key: "variant.title",
+    label: "Variant Title",
+    scope: "variant",
+    valueKind: "string",
+    widget: "text",
+    operators: ["CONTAINS", "EQ"],
+  },
+  {
+    key: "variant.weight",
+    label: "Weight",
+    scope: "variant",
+    valueKind: "number",
+    widget: "number",
+    operators: ["GTE", "LTE", "BETWEEN", "EQ"],
+  },
 
   {
     key: "variant.weightUnit",
@@ -173,4 +446,9 @@ export const UI_FILTERS: UiFilterDef[] = [
   },
 ];
 
-export const UI_FILTERS_BY_KEY = new Map(UI_FILTERS.map((d) => [d.key, d]));
+/**
+ * Fast lookup by key (used by ProductsFilterBar, etc.).
+ */
+export const UI_FILTERS_BY_KEY = new Map<FilterKey, UiFilterDef>(
+  UI_FILTERS.map((d) => [d.key, d]),
+);
