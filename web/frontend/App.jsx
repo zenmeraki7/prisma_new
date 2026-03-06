@@ -41,11 +41,11 @@ export default function App() {
             {/* <Route path="/history/:id" element={<BulkJobDetailsPg />} /> */}
 
             <a href="products">{t("NavigationMenu.Products")}</a>
-            {/* <a href="filteredProductspage">{t("NavigationMenu.FilteredProductsPage")}</a> */}
+            {/* <a href="filteredProductspage">{t("NavigationMenu.FilteredProductsPage")}</a>
             <a href="productsindexPage">
               {t("NavigationMenu.ProductsIndexPage")}
-            </a>
-            <a href="snapshotjobspage">
+            </a> */}
+            {/* <a href="snapshotjobspage">
               {t("NavigationMenu.SnapshotJobsPage")}
             </a>
             <a href="/History">
@@ -53,19 +53,19 @@ export default function App() {
             </a>
             <a href="/Import">
               {t("NavigationMenu.Import")}
-            </a>
-            <a href="/settings">
+            </a> */}
+            {/* <a href="/settings">
               {t("NavigationMenu.Settings")}
             </a>
             <a href="/spreadsheetEdit">
               {t("NavigationMenu.SpreadSheetEdit")}
-            </a>
-            <a href="/Export">
+            </a> */}
+            {/* <a href="/Export">
               {t("NavigationMenu.Export")}
             </a>
             <a href="/snapshotRunsPage">
               {t("NavigationMenu.SnapshotRunsPage")}
-            </a>
+            </a> */}
           </NavMenu>
 
           <Routes pages={pages} />

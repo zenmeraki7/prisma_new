@@ -6,8 +6,8 @@ import express from "express";
 import serveStatic from "serve-static";
 
 import { productsPgRouter } from "./routes/products.pg.js";
-import { bulkPgRouter } from "./routes/bulk.pg.js";
-import { historyPgRouter } from "./routes/history.pg.js";
+// import { bulkPgRouter } from "./routes/bulk.pg.js";
+// import { historyPgRouter } from "./routes/history.pg.js";
 import syncPgRoutes from "./routes/sync.pg.js";
 import webhooksPgRoutes from "./routes/webhooks.pg.js";
 
@@ -407,8 +407,8 @@ app.use(express.json());
 
 // PG-backed REST endpoints
 app.use("/api/pg", productsPgRouter);
-app.use("/api/pg", bulkPgRouter);
-app.use("/api/pg", historyPgRouter);
+// app.use("/api/pg", bulkPgRouter);
+// app.use("/api/pg", historyPgRouter);
 app.use("/api/pg", syncPgRoutes);
 app.use("/api/webhooks/pg", webhooksPgRoutes);
 
