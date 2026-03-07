@@ -1,15 +1,20 @@
-// FILE: web/frontend/hooks/useProductsByFilter.ts
 import { useMemo } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { graphqlRequest } from "../../utils/graphqlClient";
 import type { FilterExpr } from "../lib/filters/dsl";
 
-export type FilterExecutionMode = "AUTO" | "FAST_ONLY" | "SNAPSHOT_ONLY" | "HYBRID";
+export type FilterExecutionMode =
+  | "AUTO"
+  | "FAST_ONLY"
+  | "SNAPSHOT_ONLY"
+  | "HYBRID";
 
 export interface FilterGuardrailInfo {
-  candidateCount: number;
-  candidateLimit: number;
-  candidateLimitHit: boolean;
+  totalMatched: number;
+  shownCount: number;
+  pageSize: number;
+  hasMore: boolean;
+  limited: boolean;
 }
 
 export interface ProductLiteNode {
@@ -30,7 +35,7 @@ export interface ProductsByFilterPage {
   items: ProductLiteNode[];
   nextCursor: string | null;
   mode: FilterExecutionMode;
-  guardrail: FilterGuardrailInfo;
+  guardrail: FilterGuardrailInfo | null;
   warnings?: string[];
 }
 
@@ -53,9 +58,11 @@ const PRODUCTS_BY_FILTER_QUERY = /* GraphQL */ `
       nextCursor
       mode
       guardrail {
-        candidateCount
-        candidateLimit
-        candidateLimitHit
+        totalMatched
+        shownCount
+        pageSize
+        hasMore
+        limited
       }
       warnings
     }
@@ -71,9 +78,18 @@ export interface UseProductsByFilterOptions {
 }
 
 export function useProductsByFilter(options: UseProductsByFilterOptions) {
-  const { requestKey = 0, filterExpr, snapshotRunId, pageSize = 50, enabled = true } = options;
+  const {
+    requestKey = 0,
+    filterExpr,
+    snapshotRunId,
+    pageSize = 50,
+    enabled = true,
+  } = options;
 
-  const filterKey = useMemo(() => JSON.stringify(filterExpr ?? null), [filterExpr]);
+  const filterKey = useMemo(
+    () => JSON.stringify(filterExpr ?? null),
+    [filterExpr],
+  );
 
   const baseInput = useMemo(
     () => ({
@@ -86,32 +102,64 @@ export function useProductsByFilter(options: UseProductsByFilterOptions) {
   );
 
   const query = useInfiniteQuery<ProductsByFilterPage>({
-    queryKey: ["productsByFilter", requestKey, pageSize, snapshotRunId ?? null, filterKey],
+    queryKey: [
+      "productsByFilter",
+      requestKey,
+      pageSize,
+      snapshotRunId ?? null,
+      filterKey,
+    ],
     enabled,
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     queryFn: async ({ pageParam }) => {
-      const payload = { ...baseInput, after: (pageParam as string) ?? null };
-      const response = await graphqlRequest<{ productsByFilter: ProductsByFilterPage }>(
-        PRODUCTS_BY_FILTER_QUERY,
-        { input: payload },
-      );
+      const payload = {
+        ...baseInput,
+        after: (pageParam as string | null) ?? null,
+      };
+
+      const response = await graphqlRequest<{
+        productsByFilter: ProductsByFilterPage;
+      }>(PRODUCTS_BY_FILTER_QUERY, { input: payload });
+
       return response.productsByFilter;
     },
-
-    // ✅ IMPORTANT: remove placeholderData, otherwise UI keeps showing old filtered results
-    // placeholderData: (prev) => prev,
   });
 
   const pages = query.data?.pages ?? [];
   const items: ProductLiteNode[] = pages.flatMap((p) => p.items);
-  const lastPage = pages.length ? pages[pages.length - 1] : undefined;
+  const lastPage = pages.length > 0 ? pages[pages.length - 1] : undefined;
+
+  const mergedGuardrail: FilterGuardrailInfo | null = useMemo(() => {
+    if (!pages.length) return null;
+
+    const firstNonNullGuardrail =
+      pages.find((p) => p.guardrail != null)?.guardrail ?? null;
+
+    if (!firstNonNullGuardrail) return null;
+
+    return {
+      totalMatched: firstNonNullGuardrail.totalMatched ?? items.length,
+      shownCount: items.length,
+      pageSize: firstNonNullGuardrail.pageSize ?? pageSize,
+      hasMore: Boolean(lastPage?.nextCursor),
+      limited:
+        typeof firstNonNullGuardrail.limited === "boolean"
+          ? firstNonNullGuardrail.limited
+          : Boolean(lastPage?.nextCursor),
+    };
+  }, [pages, items.length, pageSize, lastPage?.nextCursor]);
+
+  const mergedWarnings = useMemo(() => {
+    const all = pages.flatMap((p) => p.warnings ?? []);
+    return [...new Set(all)];
+  }, [pages]);
 
   return {
     items,
     mode: lastPage?.mode ?? "AUTO",
-    guardrail: lastPage?.guardrail ?? null,
-    warnings: lastPage?.warnings ?? [],
+    guardrail: mergedGuardrail,
+    warnings: mergedWarnings,
     hasNextPage: query.hasNextPage,
     loadMore: query.fetchNextPage,
     loading: query.isLoading,

@@ -9,8 +9,6 @@ export type SyncProductsResult = {
   hasNextPage: boolean;
 };
 
-// Low-level one-page call ---------------------------------------
-
 const SYNC_PRODUCTS_MUTATION = /* GraphQL */ `
   mutation SyncProductsToDb($first: Int!, $after: String) {
     syncProductsToDb(first: $first, after: $after) {
@@ -21,12 +19,8 @@ const SYNC_PRODUCTS_MUTATION = /* GraphQL */ `
   }
 `;
 
-/**
- * Call the backend once to sync a single page of products from Shopify
- * into ProductLite / VariantRollup / ProductTag.
- */
 export async function syncProductsToDbRequest(
-  _app: AppBridgeState, // reserved for future AppBridge-aware fetch
+  _app: AppBridgeState,
   params: {
     first?: number;
     after?: string | null;
@@ -46,26 +40,21 @@ export async function syncProductsToDbRequest(
     }),
   });
 
+  const json = await response.json().catch(() => null);
+
   if (!response.ok) {
-    const text = await response.text();
     throw new Error(
-      `Sync request failed: ${response.status} ${response.statusText} – ${text}`,
+      `Sync request failed: ${response.status} ${response.statusText} – ${JSON.stringify(json)}`
     );
   }
 
-  const json = await response.json();
-
-  if (json.errors && json.errors.length) {
+  if (json?.errors?.length) {
     throw new Error(
-      `GraphQL errors from syncProductsToDb: ${JSON.stringify(
-        json.errors,
-        null,
-        2,
-      )}`,
+      `GraphQL errors from syncProductsToDb: ${JSON.stringify(json.errors, null, 2)}`
     );
   }
 
-  const payload = json.data?.syncProductsToDb;
+  const payload = json?.data?.syncProductsToDb;
   if (!payload) {
     throw new Error("syncProductsToDb response missing payload");
   }
@@ -73,34 +62,28 @@ export async function syncProductsToDbRequest(
   return payload as SyncProductsResult;
 }
 
-// High-level “sync entire catalog” helper ------------------------
-
-/**
- * Loop through all Shopify pages and fully populate the FAST plane.
- * Call this from a button / mutation.
- */
 export async function syncAllProductsToDb(
   app: AppBridgeState | undefined,
 ): Promise<{ totalSynced: number }> {
   if (!app) throw new Error("AppBridge not ready");
 
   let after: string | null = null;
+  let hasNextPage = true;
   let totalSynced = 0;
 
-  do {
+  while (hasNextPage) {
     const res = await syncProductsToDbRequest(app, {
       first: 100,
       after,
     });
 
     totalSynced += res.synced;
-    after = res.hasNextPage ? res.nextCursor : null;
-  } while (after);
+    hasNextPage = Boolean(res.hasNextPage);
+    after = res.nextCursor ?? null;
+  }
 
   return { totalSynced };
 }
-
-// React Query hook for UI ----------------------------------------
 
 export function useFastPlaneSync(app: AppBridgeState | undefined) {
   const queryClient = useQueryClient();
@@ -108,7 +91,6 @@ export function useFastPlaneSync(app: AppBridgeState | undefined) {
   return useMutation({
     mutationFn: () => syncAllProductsToDb(app),
     onSuccess: async () => {
-      // After syncing, refresh both status + table queries
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["productsByFilter"] }),
         queryClient.invalidateQueries({ queryKey: ["bootstrapProducts"] }),

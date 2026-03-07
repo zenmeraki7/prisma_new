@@ -46,27 +46,13 @@ const OP_LABEL: Record<string, string> = {
 };
 
 type Props = {
-  /** applied search value (source of truth in parent) */
   searchText: string;
-
-  /** parent setter (kept for UI sync) */
   onSearchTextChange: (v: string) => void;
-
-  /** filters are applied immediately (add/remove/clear all) */
   draftFilters?: DraftFilter[];
   onDraftFiltersChange: (filters: DraftFilter[]) => void;
-
-  /**
-   * ✅ Apply is SEARCH ONLY and must accept the new search value
-   * to avoid stale state + double click bug.
-   */
   onApplySearch: (nextSearch: string) => void;
-
-  /** Reset is SEARCH ONLY */
   onResetSearch: () => void;
-
   loading?: boolean;
-
   fetchSuggestions: (key: string, q: string) => Promise<string[]>;
 };
 
@@ -93,6 +79,88 @@ function normalizeValueForStorage(def: UiFilterDef, op: FilterOperator, raw: any
   return raw;
 }
 
+function safeJsonParse(input: string) {
+  try {
+    return JSON.parse(input);
+  } catch {
+    return null;
+  }
+}
+
+function parseLooseArrayLikeString(input: string): string[] {
+  const trimmed = String(input ?? "").trim();
+  if (!trimmed) return [];
+
+  const direct = safeJsonParse(trimmed);
+  if (Array.isArray(direct)) {
+    return direct.map((x) => String(x ?? "").trim()).filter(Boolean);
+  }
+
+  if (trimmed.startsWith('"[') && trimmed.endsWith(']"')) {
+    const unwrapped = safeJsonParse(trimmed);
+    if (typeof unwrapped === "string") {
+      const parsed = safeJsonParse(unwrapped);
+      if (Array.isArray(parsed)) {
+        return parsed.map((x) => String(x ?? "").trim()).filter(Boolean);
+      }
+    }
+  }
+
+  return [];
+}
+
+function sanitizeTagLikeValue(raw: any, op: FilterOperator) {
+  if (Array.isArray(raw)) {
+    const clean = raw.map((x) => String(x ?? "").trim()).filter(Boolean);
+    return op === "IN" ? clean : clean[0] ?? "";
+  }
+
+  const s = String(raw ?? "").trim();
+  if (!s) return op === "IN" ? [] : "";
+
+  const parsed = parseLooseArrayLikeString(s);
+  if (parsed.length > 0) {
+    return op === "IN" ? parsed : parsed[0] ?? "";
+  }
+
+  return op === "IN" ? [s] : s;
+}
+
+function normalizeCommittedValue(def: UiFilterDef, op: FilterOperator, raw: any) {
+  const base = normalizeValueForStorage(def, op, raw);
+
+  if (def.key === "product.tag") {
+    return sanitizeTagLikeValue(base, op);
+  }
+
+  return base;
+}
+
+function formatValueLabelForDisplay(def: UiFilterDef, op: FilterOperator, value: any) {
+  if (op === "IS_SET" || op === "IS_NOT_SET") return "";
+
+  if (def.widget === "select") {
+    const item = def.enumValues?.find((x) => x.value === value);
+    return item?.label ?? String(value ?? "");
+  }
+
+  if (def.widget === "boolean") {
+    return String(value) === "true" ? "True" : "False";
+  }
+
+  if (op === "BETWEEN") {
+    const a = String(value?.[0] ?? "").trim();
+    const b = String(value?.[1] ?? "").trim();
+    return `${a || "…"} and ${b || "…"}`;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((x) => String(x ?? "").trim()).filter(Boolean).join(", ");
+  }
+
+  return String(value ?? "");
+}
+
 function isEffectivelyEmpty(def: UiFilterDef, op: FilterOperator, value: any) {
   if (op === "IS_SET" || op === "IS_NOT_SET") return false;
 
@@ -100,6 +168,10 @@ function isEffectivelyEmpty(def: UiFilterDef, op: FilterOperator, value: any) {
     const a = String(value?.[0] ?? "").trim();
     const b = String(value?.[1] ?? "").trim();
     return !a && !b;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((x) => String(x ?? "").trim()).filter(Boolean).length === 0;
   }
 
   const v = String(value ?? "").trim();
@@ -122,10 +194,8 @@ export const ProductsFilterBar: React.FC<Props> = ({
 }) => {
   const filtersArray: DraftFilter[] = Array.isArray(draftFilters) ? draftFilters : [];
 
-  // ✅ local typing state (draft)
   const [searchDraft, setSearchDraft] = React.useState<string>(searchText ?? "");
 
-  // ✅ keep draft in sync if parent changes applied search externally
   React.useEffect(() => {
     setSearchDraft(searchText ?? "");
   }, [searchText]);
@@ -134,21 +204,18 @@ export const ProductsFilterBar: React.FC<Props> = ({
   const draft = (searchDraft ?? "").trim();
   const searchDirty = draft !== applied;
 
-  // ✅ Apply SEARCH only (no stale state)
   const applySearch = () => {
     const nextSearch = draft;
     onSearchTextChange(nextSearch);
     onApplySearch(nextSearch);
   };
 
-  // ✅ Reset SEARCH only
   const resetSearch = () => {
     setSearchDraft("");
     onSearchTextChange("");
     onResetSearch();
   };
 
-  // ✅ Filters apply immediately (parent recomputes expr + refetch)
   const applyFiltersNow = (next: DraftFilter[]) => {
     onDraftFiltersChange(Array.isArray(next) ? next : []);
   };
@@ -181,12 +248,10 @@ export const ProductsFilterBar: React.FC<Props> = ({
               onQueryClear={() => setSearchDraft("")}
               filters={filters}
               appliedFilters={appliedFilters}
-              // ✅ Clear all clears FILTERS only
               onClearAll={() => applyFiltersNow([])}
             />
           </div>
 
-          {/* ✅ Right side controls ONLY search */}
           <InlineStack gap="200" blockAlign="center">
             <Button
               onClick={resetSearch}
@@ -221,21 +286,7 @@ function buildAppliedFilters(
     if (isEffectivelyEmpty(d, f.op, f.value)) continue;
 
     const opLabel = OP_LABEL[String(f.op)] ?? String(f.op).toLowerCase();
-
-    let valueLabel = "";
-    if (f.op === "IS_SET" || f.op === "IS_NOT_SET") valueLabel = "";
-    else if (d.widget === "select") {
-      const item = d.enumValues?.find((x) => x.value === f.value);
-      valueLabel = item?.label ?? String(f.value ?? "");
-    } else if (d.widget === "boolean") {
-      valueLabel = String(f.value) === "true" ? "True" : "False";
-    } else if (f.op === "BETWEEN") {
-      const a = String(f.value?.[0] ?? "").trim();
-      const b = String(f.value?.[1] ?? "").trim();
-      valueLabel = `${a || "…"} and ${b || "…"}`;
-    } else {
-      valueLabel = String(f.value ?? "");
-    }
+    const valueLabel = formatValueLabelForDisplay(d, f.op, f.value);
 
     const label =
       f.op === "IS_SET"
@@ -268,7 +319,6 @@ function FilterControl(props: {
   const initialValue =
     existing?.value ?? (initialOp === "BETWEEN" ? ["", ""] : defaultValueFor(def));
 
-  // ✅ stable local draft
   const [op, setOp] = React.useState<FilterOperator>(initialOp);
   const [value, setValue] = React.useState<any>(initialValue);
 
@@ -282,7 +332,7 @@ function FilterControl(props: {
     id: existing?.id ?? uid(),
     key: def.key,
     op,
-    value: normalizeValueForStorage(def, op, value),
+    value: normalizeCommittedValue(def, op, value),
   };
 
   const commitDisabled = isEffectivelyEmpty(def, candidate.op, candidate.value);
@@ -301,7 +351,6 @@ function FilterControl(props: {
     onApplyFilters(removeFilterByKey(draftFilters, def.key));
   };
 
-  // STATUS
   if (def.widget === "select" && def.key === "product.status") {
     const choices = (def.enumValues ?? []).map((x) => ({ label: x.label, value: x.value }));
     return (
@@ -496,7 +545,6 @@ function FilterControl(props: {
     );
   }
 
-  // Suggest keys only
   const suggestionKeys = new Set<FilterKey>([
     "product.vendor",
     "product.productType",
@@ -510,9 +558,10 @@ function FilterControl(props: {
   if (def.widget === "text" && suggestionKeys.has(def.key)) {
     return (
       <SuggestText
+        filterKey={def.key}
         op={op}
         ops={def.operators}
-        value={String(value ?? "")}
+        value={String(Array.isArray(value) ? value[0] ?? "" : value ?? "")}
         onOpChange={(v) => setOp(v as FilterOperator)}
         onValueChange={(v) => setValue(v)}
         fetchSuggestions={(q) => fetchSuggestions(def.key, q)}
@@ -548,7 +597,6 @@ function FilterControl(props: {
     );
   }
 
-  // default text
   return (
     <BlockStack gap="200">
       {opSelect}
@@ -572,6 +620,7 @@ function FilterControl(props: {
 }
 
 function SuggestText(props: {
+  filterKey: FilterKey;
   op: FilterOperator;
   ops: FilterOperator[];
   value: string;
@@ -584,6 +633,7 @@ function SuggestText(props: {
   hasExisting: boolean;
 }) {
   const {
+    filterKey,
     op,
     ops,
     value,
@@ -601,12 +651,14 @@ function SuggestText(props: {
 
   React.useEffect(() => {
     let alive = true;
+
     async function run() {
       const q = value.trim();
       if (q.length < 2) {
         setOptions([]);
         return;
       }
+
       setLoading(true);
       try {
         const vals = await fetchSuggestions(q);
@@ -616,7 +668,9 @@ function SuggestText(props: {
         if (alive) setLoading(false);
       }
     }
+
     run();
+
     return () => {
       alive = false;
     };
@@ -636,7 +690,18 @@ function SuggestText(props: {
         label="Value"
         labelHidden
         value={value}
-        onChange={onValueChange}
+        onChange={(next) => {
+          let cleaned = next;
+
+          if (filterKey === "product.tag") {
+            const parsed = parseLooseArrayLikeString(cleaned);
+            if (parsed.length > 0) {
+              cleaned = parsed[0] ?? "";
+            }
+          }
+
+          onValueChange(cleaned);
+        }}
         autoComplete="off"
         placeholder={loading ? "Loading…" : "Start typing…"}
       />

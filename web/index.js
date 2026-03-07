@@ -1,4 +1,3 @@
-// FILE: web/index.js
 import "dotenv/config";
 import { join } from "path";
 import { readFileSync } from "fs";
@@ -6,8 +5,6 @@ import express from "express";
 import serveStatic from "serve-static";
 
 import { productsPgRouter } from "./routes/products.pg.js";
-// import { bulkPgRouter } from "./routes/bulk.pg.js";
-// import { historyPgRouter } from "./routes/history.pg.js";
 import syncPgRoutes from "./routes/sync.pg.js";
 import webhooksPgRoutes from "./routes/webhooks.pg.js";
 
@@ -26,9 +23,10 @@ const STATIC_PATH =
     ? `${process.cwd()}/frontend/dist`
     : `${process.cwd()}/frontend/`;
 
-/* ─────────────────────────────
-   DB TEST
-───────────────────────────── */
+/* ──────────────────────────────────────────────────────────────
+ * Bootstrap
+ * ────────────────────────────────────────────────────────────── */
+
 async function testDbConnection() {
   try {
     await prisma.$connect();
@@ -38,11 +36,12 @@ async function testDbConnection() {
   }
 }
 
-/* ─────────────────────────────
-   Helpers
-───────────────────────────── */
+/* ──────────────────────────────────────────────────────────────
+ * Primitive helpers
+ * ────────────────────────────────────────────────────────────── */
 
 function parseNumberInput(value) {
+  if (value === "" || value == null) return null;
   const n = typeof value === "number" ? value : Number(value);
   return Number.isFinite(n) ? n : null;
 }
@@ -54,10 +53,103 @@ function parseDateInput(value) {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-/* ─────────────────────────────
-   Filter Normalization (FAST)
-   - shared with productsByFilter FAST plane
-───────────────────────────── */
+function parseBooleanInput(value) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const s = value.trim().toLowerCase();
+    if (s === "true") return true;
+    if (s === "false") return false;
+  }
+  return null;
+}
+
+function normalizeString(value) {
+  return String(value ?? "").trim();
+}
+
+function normalizeStringArray(value) {
+  if (Array.isArray(value)) {
+    return value.map((v) => normalizeString(v)).filter(Boolean);
+  }
+  const single = normalizeString(value);
+  return single ? [single] : [];
+}
+
+function uniqueStrings(values) {
+  return [
+    ...new Set(
+      (values || []).filter(
+        (v) => typeof v === "string" && v.trim().length > 0,
+      ),
+    ),
+  ];
+}
+
+function safeJsonParse(input) {
+  try {
+    return JSON.parse(input);
+  } catch {
+    return null;
+  }
+}
+
+function parseLooseStringArray(value) {
+  if (Array.isArray(value)) {
+    return value.map((x) => normalizeString(x)).filter(Boolean);
+  }
+
+  const s = normalizeString(value);
+  if (!s) return [];
+
+  const direct = safeJsonParse(s);
+  if (Array.isArray(direct)) {
+    return direct.map((x) => normalizeString(x)).filter(Boolean);
+  }
+
+  if (s.startsWith('"[') && s.endsWith(']"')) {
+    const unwrapped = safeJsonParse(s);
+    if (typeof unwrapped === "string") {
+      const parsed = safeJsonParse(unwrapped);
+      if (Array.isArray(parsed)) {
+        return parsed.map((x) => normalizeString(x)).filter(Boolean);
+      }
+    }
+  }
+
+  return [s];
+}
+
+function toNullableDecimalNumber(value) {
+  if (value == null || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function toLowerStatus(value) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function weightToGrams(weight, unit) {
+  const n = toNullableDecimalNumber(weight);
+  if (n == null) return null;
+
+  const u = String(unit ?? "").trim().toLowerCase();
+  if (u === "kg") return Math.round(n * 1000);
+  if (u === "g") return Math.round(n);
+  if (u === "lb") return Math.round(n * 453.59237);
+  if (u === "oz") return Math.round(n * 28.3495231);
+
+  return Math.round(n);
+}
+
+function selectedOptionValue(selectedOptions, index) {
+  if (!Array.isArray(selectedOptions)) return null;
+  return selectedOptions[index]?.value ?? null;
+}
+
+/* ──────────────────────────────────────────────────────────────
+ * Operator normalization
+ * ────────────────────────────────────────────────────────────── */
 
 const OP_MAP = new Map([
   ["CONTAINS", "contains"],
@@ -99,6 +191,10 @@ function normalizeOp(op) {
   return OP_MAP.get(s) || OP_MAP.get(s.toUpperCase()) || null;
 }
 
+/* ──────────────────────────────────────────────────────────────
+ * Filter AST normalization
+ * ────────────────────────────────────────────────────────────── */
+
 function normalizeLeaf(node) {
   if (!node || typeof node !== "object") return null;
 
@@ -127,41 +223,369 @@ function normalizeToLeaves(expr, out) {
     return;
   }
 
-  if (Array.isArray(expr.and))
+  if (Array.isArray(expr.and)) {
     for (const c of expr.and) normalizeToLeaves(c, out);
-  if (Array.isArray(expr.AND))
+  }
+  if (Array.isArray(expr.AND)) {
     for (const c of expr.AND) normalizeToLeaves(c, out);
-  if (Array.isArray(expr.or))
+  }
+  if (Array.isArray(expr.or)) {
     for (const c of expr.or) normalizeToLeaves(c, out);
-  if (Array.isArray(expr.OR))
+  }
+  if (Array.isArray(expr.OR)) {
     for (const c of expr.OR) normalizeToLeaves(c, out);
+  }
 }
 
-/**
- * Build a Prisma `where` object for ProductLite from the FAST filterExpr.
- *
- * Supported filterIds (case-insensitive):
- *
- *   product.search
- *   product.status, status, product_status
- *   product.title, title, product_title
- *   product.vendor, vendor, product_vendor
- *   product.productType, product_type, producttype
- *   product.tag, product.tags, tag, product_tag
- *   product.createdAt
- *   product.publishedAt
- *   product.updatedAt
- *
- *   product.totalInventory, product.inventory_quantity, inventory_quantity
- *   product.variantCount, product.variant_count, variant_count
- *
- * Everything else (SKU, barcode, etc.) is ignored on FAST plane.
- */
-function buildProductLiteWhereFromFilterExpr(shopId, filterExpr) {
+/* ──────────────────────────────────────────────────────────────
+ * Prisma clause builders
+ * ────────────────────────────────────────────────────────────── */
+
+function buildInsensitiveStringClause(column, opNorm, value) {
+  if (opNorm === "is_set") return { [column]: { not: null } };
+  if (opNorm === "is_not_set") return { [column]: null };
+
+  const v = normalizeString(value);
+  if (!v) return null;
+
+  if (opNorm === "eq") {
+    return { [column]: { equals: v, mode: "insensitive" } };
+  }
+  if (opNorm === "neq") {
+    return { NOT: { [column]: { equals: v, mode: "insensitive" } } };
+  }
+  if (opNorm === "contains") {
+    return { [column]: { contains: v, mode: "insensitive" } };
+  }
+  if (opNorm === "not_contains") {
+    return { NOT: { [column]: { contains: v, mode: "insensitive" } } };
+  }
+  if (opNorm === "starts_with") {
+    return { [column]: { startsWith: v, mode: "insensitive" } };
+  }
+  if (opNorm === "ends_with") {
+    return { [column]: { endsWith: v, mode: "insensitive" } };
+  }
+  if (opNorm === "in") {
+    const vals = normalizeStringArray(value);
+    if (!vals.length) return null;
+    return {
+      OR: vals.map((x) => ({
+        [column]: { equals: x, mode: "insensitive" },
+      })),
+    };
+  }
+  if (opNorm === "not_in") {
+    const vals = normalizeStringArray(value);
+    if (!vals.length) return null;
+    return {
+      AND: vals.map((x) => ({
+        NOT: {
+          [column]: { equals: x, mode: "insensitive" },
+        },
+      })),
+    };
+  }
+
+  return null;
+}
+
+function buildCaseInsensitiveExactListClause(column, opNorm, value) {
+  const vals = normalizeStringArray(value)
+    .map((s) => s.toLowerCase())
+    .filter(Boolean);
+
+  if (!vals.length) return null;
+
+  if (opNorm === "eq") {
+    return {
+      [column]: {
+        equals: vals[0],
+        mode: "insensitive",
+      },
+    };
+  }
+
+  if (opNorm === "neq") {
+    return {
+      NOT: {
+        [column]: {
+          equals: vals[0],
+          mode: "insensitive",
+        },
+      },
+    };
+  }
+
+  if (opNorm === "in") {
+    return {
+      OR: vals.map((v) => ({
+        [column]: {
+          equals: v,
+          mode: "insensitive",
+        },
+      })),
+    };
+  }
+
+  if (opNorm === "not_in") {
+    return {
+      AND: vals.map((v) => ({
+        NOT: {
+          [column]: {
+            equals: v,
+            mode: "insensitive",
+          },
+        },
+      })),
+    };
+  }
+
+  return null;
+}
+
+function buildNumericFieldClause(column, opNorm, value) {
+  if (opNorm === "is_set") return { [column]: { not: null } };
+  if (opNorm === "is_not_set") return { [column]: null };
+
+  if (opNorm === "between") {
+    const a = parseNumberInput(value?.[0]);
+    const b = parseNumberInput(value?.[1]);
+
+    const range = {};
+    if (a != null) range.gte = a;
+    if (b != null) range.lte = b;
+
+    return Object.keys(range).length ? { [column]: range } : null;
+  }
+
+  const n = parseNumberInput(value);
+  if (n == null) return null;
+
+  if (opNorm === "eq") return { [column]: n };
+  if (opNorm === "neq") return { NOT: { [column]: n } };
+  if (opNorm === "gt" || opNorm === "gte" || opNorm === "lt" || opNorm === "lte") {
+    return { [column]: { [opNorm]: n } };
+  }
+
+  return null;
+}
+
+function buildDateFieldClause(column, opNorm, value) {
+  if (opNorm === "is_set") return { [column]: { not: null } };
+  if (opNorm === "is_not_set") return { [column]: null };
+
+  if (opNorm === "between") {
+    const from = parseDateInput(value?.[0]);
+    const to = parseDateInput(value?.[1]);
+    const range = {};
+    if (from) range.gte = from;
+    if (to) range.lte = to;
+    return Object.keys(range).length ? { [column]: range } : null;
+  }
+
+  const d = parseDateInput(value);
+  if (!d) return null;
+
+  if (opNorm === "eq") return { [column]: d };
+  if (opNorm === "gt" || opNorm === "gte" || opNorm === "lt" || opNorm === "lte") {
+    return { [column]: { [opNorm]: d } };
+  }
+
+  return null;
+}
+
+function buildVariantSomeStringClause(shopId, column, opNorm, value) {
+  const base = buildInsensitiveStringClause(column, opNorm, value);
+  if (!base) return null;
+
+  return {
+    variants: {
+      some: {
+        shopId,
+        ...base,
+      },
+    },
+  };
+}
+
+function buildVariantSomeNumberClause(shopId, column, opNorm, value) {
+  const base = buildNumericFieldClause(column, opNorm, value);
+  if (!base) return null;
+
+  return {
+    variants: {
+      some: {
+        shopId,
+        ...base,
+      },
+    },
+  };
+}
+
+function buildVariantSomeBooleanClause(shopId, column, value) {
+  const b = parseBooleanInput(value);
+  if (b == null) return null;
+
+  return {
+    variants: {
+      some: {
+        shopId,
+        [column]: b,
+      },
+    },
+  };
+}
+
+function buildCollectionsClause(shopId, opNorm, value) {
+  if (opNorm === "is_set") {
+    return {
+      collections: {
+        some: { shopId },
+      },
+    };
+  }
+
+  if (opNorm === "is_not_set") {
+    return {
+      collections: {
+        none: { shopId },
+      },
+    };
+  }
+
+  const v = normalizeString(value);
+  if (!v && opNorm !== "in") return null;
+
+  if (opNorm === "in") {
+    const vals = normalizeStringArray(value);
+    if (!vals.length) return null;
+
+    return {
+      collections: {
+        some: {
+          shopId,
+          OR: vals.flatMap((x) => [
+            { collectionTitle: { equals: x, mode: "insensitive" } },
+            { collectionHandle: { equals: x, mode: "insensitive" } },
+            { collectionId: { equals: x } },
+          ]),
+        },
+      },
+    };
+  }
+
+  const matcher =
+    opNorm === "eq"
+      ? {
+          OR: [
+            { collectionTitle: { equals: v, mode: "insensitive" } },
+            { collectionHandle: { equals: v, mode: "insensitive" } },
+            { collectionId: { equals: v } },
+          ],
+        }
+      : opNorm === "contains"
+        ? {
+            OR: [
+              { collectionTitle: { contains: v, mode: "insensitive" } },
+              { collectionHandle: { contains: v, mode: "insensitive" } },
+              { collectionId: { contains: v } },
+            ],
+          }
+        : opNorm === "starts_with"
+          ? {
+              OR: [
+                { collectionTitle: { startsWith: v, mode: "insensitive" } },
+                { collectionHandle: { startsWith: v, mode: "insensitive" } },
+                { collectionId: { startsWith: v } },
+              ],
+            }
+          : opNorm === "ends_with"
+            ? {
+                OR: [
+                  { collectionTitle: { endsWith: v, mode: "insensitive" } },
+                  { collectionHandle: { endsWith: v, mode: "insensitive" } },
+                  { collectionId: { endsWith: v } },
+                ],
+              }
+            : null;
+
+  if (!matcher) return null;
+
+  return {
+    collections: {
+      some: {
+        shopId,
+        ...matcher,
+      },
+    },
+  };
+}
+
+function buildInventoryLocationClause(shopId, opNorm, value) {
+  const v = normalizeString(value);
+  if (!v && opNorm !== "is_set" && opNorm !== "is_not_set") return null;
+
+  if (opNorm === "is_set") {
+    return {
+      inventoryByLoc: {
+        some: { shopId },
+      },
+    };
+  }
+
+  if (opNorm === "is_not_set") {
+    return {
+      inventoryByLoc: {
+        none: { shopId },
+      },
+    };
+  }
+
+  if (opNorm === "eq") {
+    return {
+      inventoryByLoc: {
+        some: {
+          shopId,
+          OR: [
+            { locationId: v },
+            { locationName: { equals: v, mode: "insensitive" } },
+          ],
+        },
+      },
+    };
+  }
+
+  if (opNorm === "contains") {
+    return {
+      inventoryByLoc: {
+        some: {
+          shopId,
+          OR: [
+            { locationId: { contains: v } },
+            { locationName: { contains: v, mode: "insensitive" } },
+          ],
+        },
+      },
+    };
+  }
+
+  return null;
+}
+
+/* ──────────────────────────────────────────────────────────────
+ * Filter compiler
+ * ────────────────────────────────────────────────────────────── */
+
+function buildWhereAndWarnings(shopId, filterExpr) {
   const andClauses = [{ shopId }];
+  const warnings = [];
 
   if (!filterExpr) {
-    return andClauses.length === 1 ? andClauses[0] : { AND: andClauses };
+    return {
+      where: andClauses.length === 1 ? andClauses[0] : { AND: andClauses },
+      warnings,
+    };
   }
 
   const leaves = [];
@@ -171,248 +595,705 @@ function buildProductLiteWhereFromFilterExpr(shopId, filterExpr) {
     const { filterId, op, value } = leaf;
     if (!filterId || !op) continue;
 
-    const id = String(filterId).toLowerCase();
-    const opNorm = op; // already normalized by normalizeOp
+    const id = String(filterId).trim().toLowerCase();
+    const opNorm = op;
+    let clause = null;
 
-    // 1) product.search
     if (id === "product.search") {
-      if (opNorm === "contains" && typeof value === "string") {
-        const v = value.trim();
-        if (v.length > 0) {
-          andClauses.push({
-            OR: [
-              { title: { contains: v, mode: "insensitive" } },
-              { vendor: { contains: v, mode: "insensitive" } },
-              { handle: { contains: v, mode: "insensitive" } },
-              { productType: { contains: v, mode: "insensitive" } },
-              { tags: { has: v } },
-            ],
-          });
-        }
+      const v = normalizeString(value);
+      if (v) {
+        clause = {
+          OR: [
+            { title: { contains: v, mode: "insensitive" } },
+            { vendor: { contains: v, mode: "insensitive" } },
+            { handle: { contains: v, mode: "insensitive" } },
+            { productType: { contains: v, mode: "insensitive" } },
+            { tags: { has: v } },
+          ],
+        };
       }
-      continue;
-    }
-
-    // 2) product.status
-    if (id === "product.status" || id === "status" || id === "product_status") {
-      if (opNorm === "eq" && typeof value === "string") {
-        andClauses.push({
-          status: String(value).toUpperCase(),
-        });
-      } else if (opNorm === "in" && Array.isArray(value)) {
-        const vals = value
-          .filter((v) => typeof v === "string")
-          .map((v) => v.toUpperCase());
-        if (vals.length > 0) {
-          andClauses.push({
-            status: { in: vals },
-          });
-        }
-      }
-      continue;
-    }
-
-    // 3) product.title
-    if (id === "product.title" || id === "title" || id === "product_title") {
-      if (opNorm === "contains" && typeof value === "string") {
-        const v = value.trim();
-        if (v.length > 0) {
-          andClauses.push({
-            title: { contains: v, mode: "insensitive" },
-          });
-        }
-      }
-      continue;
-    }
-
-    // 4) product.vendor
-    if (id === "product.vendor" || id === "vendor" || id === "product_vendor") {
-      if (opNorm === "eq" && typeof value === "string") {
-        andClauses.push({ vendor: value });
-      } else if (opNorm === "contains" && typeof value === "string") {
-        const v = value.trim();
-        if (v.length > 0) {
-          andClauses.push({
-            vendor: { contains: v, mode: "insensitive" },
-          });
-        }
-      }
-      continue;
-    }
-
-    // 5) product.productType
-    if (
+    } else if (id === "product.status" || id === "status" || id === "product_status") {
+      clause = buildCaseInsensitiveExactListClause("status", opNorm, value);
+    } else if (id === "product.title" || id === "title" || id === "product_title") {
+      clause = buildInsensitiveStringClause("title", opNorm, value);
+    } else if (id === "product.handle" || id === "handle" || id === "product_handle") {
+      clause = buildInsensitiveStringClause("handle", opNorm, value);
+    } else if (id === "product.vendor" || id === "vendor" || id === "product_vendor") {
+      clause = buildInsensitiveStringClause("vendor", opNorm, value);
+    } else if (
       id === "product.producttype" ||
       id === "product.product_type" ||
       id === "producttype" ||
       id === "product_type"
     ) {
-      if (opNorm === "eq" && typeof value === "string") {
-        andClauses.push({ productType: value });
-      } else if (opNorm === "contains" && typeof value === "string") {
-        const v = value.trim();
-        if (v.length > 0) {
-          andClauses.push({
-            productType: { contains: v, mode: "insensitive" },
-          });
-        }
-      }
-      continue;
-    }
+      clause = buildInsensitiveStringClause("productType", opNorm, value);
+    } else if (id === "product.id" || id === "id" || id === "product_id") {
+      const v = normalizeString(value);
+      if (opNorm === "eq" && v) clause = { id: v };
+      else if (opNorm === "contains" && v) clause = { id: { contains: v } };
+      else if (opNorm === "starts_with" && v) clause = { id: { startsWith: v } };
+      else if (opNorm === "ends_with" && v) clause = { id: { endsWith: v } };
+    } else if (
+      id === "product.tag" ||
+      id === "product.tags" ||
+      id === "tag" ||
+      id === "product_tag"
+    ) {
+      const vals = parseLooseStringArray(value);
 
-    // 6) product.tag(s) → tags[]
-    if (id === "product.tag" || id === "product.tags" || id === "tag" || id === "product_tag") {
-      if (opNorm === "contains" && typeof value === "string") {
-        const v = value.trim();
-        if (v.length > 0) {
-          andClauses.push({
-            tags: { has: v },
-          });
-        }
-      } else if (opNorm === "in" && Array.isArray(value)) {
-        const vals = value
-          .filter((v) => typeof v === "string")
-          .map((v) => v.trim())
-          .filter((v) => v.length > 0);
-        if (vals.length > 0) {
-          andClauses.push({
-            tags: { hasSome: vals },
-          });
-        }
+      if (opNorm === "contains" || opNorm === "eq") {
+        if (vals.length === 1) clause = { tags: { has: vals[0] } };
+        else if (vals.length > 1) clause = { tags: { hasSome: vals } };
+      } else if (opNorm === "in") {
+        if (vals.length) clause = { tags: { hasSome: vals } };
+      } else if (opNorm === "not_in") {
+        if (vals.length) clause = { NOT: { tags: { hasSome: vals } } };
       }
-      continue;
-    }
-
-    // 7) Dates: created / published / updated
-    if (id === "product.createdat") {
-      if ((opNorm === "gte" || opNorm === "gt") && typeof value === "string") {
-        const d = parseDateInput(value);
-        if (d) {
-          andClauses.push({
-            createdAtShopify: {
-              [opNorm === "gt" ? "gt" : "gte"]: d,
-            },
-          });
-        }
-      }
-      continue;
-    }
-
-    if (id === "product.publishedat") {
-      if ((opNorm === "gte" || opNorm === "gt") && typeof value === "string") {
-        const d = parseDateInput(value);
-        if (d) {
-          andClauses.push({
-            publishedAtShopify: {
-              [opNorm === "gt" ? "gt" : "gte"]: d,
-            },
-          });
-        }
-      }
-      continue;
-    }
-
-    if (id === "product.updatedat") {
-      if ((opNorm === "gte" || opNorm === "gt") && typeof value === "string") {
-        const d = parseDateInput(value);
-        if (d) {
-          andClauses.push({
-            updatedAtShopify: {
-              [opNorm === "gt" ? "gt" : "gte"]: d,
-            },
-          });
-        }
-      }
-      continue;
-    }
-
-    // 8) Inventory Quantity (rollup) → variantRollup.totalInventory
-    if (
+    } else if (id === "product.createdat") {
+      clause = buildDateFieldClause("createdAtShopify", opNorm, value);
+    } else if (id === "product.publishedat") {
+      clause = buildDateFieldClause("publishedAtShopify", opNorm, value);
+    } else if (id === "product.updatedat") {
+      clause = buildDateFieldClause("updatedAtShopify", opNorm, value);
+    } else if (
       id === "product.totalinventory" ||
+      id === "product.inventoryquantity" ||
       id === "product.inventory_quantity" ||
       id === "inventory_quantity"
     ) {
-      const n = parseNumberInput(value);
-      if (n == null) continue;
-
-      if (opNorm === "gt" || opNorm === "gte") {
-        andClauses.push({
-          variantRollup: {
-            totalInventory: {
-              [opNorm === "gt" ? "gt" : "gte"]: n,
-            },
-          },
-        });
-      } else if (opNorm === "lt" || opNorm === "lte") {
-        andClauses.push({
-          variantRollup: {
-            totalInventory: {
-              [opNorm === "lt" ? "lt" : "lte"]: n,
-            },
-          },
-        });
-      } else if (opNorm === "eq") {
-        andClauses.push({
-          variantRollup: { totalInventory: n },
-        });
-      }
-      continue;
-    }
-
-    // 9) Variant Count → variantRollup.variantCount
-    if (
+      const inner = buildNumericFieldClause("totalInventory", opNorm, value);
+      if (inner) clause = { variantRollup: { is: inner } };
+    } else if (
       id === "product.variantcount" ||
       id === "product.variant_count" ||
       id === "variant_count"
     ) {
-      const n = parseNumberInput(value);
-      if (n == null) continue;
-
-      if (opNorm === "gt" || opNorm === "gte") {
-        andClauses.push({
-          variantRollup: {
-            variantCount: {
-              [opNorm === "gt" ? "gt" : "gte"]: n,
-            },
-          },
-        });
-      } else if (opNorm === "lt" || opNorm === "lte") {
-        andClauses.push({
-          variantRollup: {
-            variantCount: {
-              [opNorm === "lt" ? "lt" : "lte"]: n,
-            },
-          },
-        });
-      } else if (opNorm === "eq") {
-        andClauses.push({
-          variantRollup: { variantCount: n },
-        });
-      }
-      continue;
+      const inner = buildNumericFieldClause("variantCount", opNorm, value);
+      if (inner) clause = { variantRollup: { is: inner } };
+    } else if (id === "product.collection") {
+      clause = buildCollectionsClause(shopId, opNorm, value);
+    } else if (id === "variant.sku") {
+      clause = buildVariantSomeStringClause(shopId, "sku", opNorm, value);
+    } else if (id === "variant.barcode") {
+      clause = buildVariantSomeStringClause(shopId, "barcode", opNorm, value);
+    } else if (id === "variant.title") {
+      clause = buildVariantSomeStringClause(shopId, "title", opNorm, value);
+    } else if (id === "variant.compareatprice") {
+      clause = buildVariantSomeNumberClause(shopId, "compareAtPrice", opNorm, value);
+    } else if (id === "variant.cost") {
+      clause = buildVariantSomeNumberClause(shopId, "cost", opNorm, value);
+    } else if (id === "variant.price") {
+      clause = buildVariantSomeNumberClause(shopId, "price", opNorm, value);
+    } else if (id === "variant.profitmargin") {
+      clause = buildVariantSomeNumberClause(shopId, "profitMarginPct", opNorm, value);
+    } else if (id === "variant.trackquantity") {
+      clause = buildVariantSomeBooleanClause(shopId, "trackQuantity", value);
+    } else if (id === "variant.chargetax") {
+      clause = buildVariantSomeBooleanClause(shopId, "taxable", value);
+    } else if (id === "variant.physicalproduct") {
+      clause = buildVariantSomeBooleanClause(shopId, "requiresShipping", value);
+    } else if (
+      id === "variant.inventoryquantity" ||
+      id === "variant.inventory_quantity"
+    ) {
+      clause = buildVariantSomeNumberClause(shopId, "inventoryQty", opNorm, value);
+    } else if (id === "variant.inventorypolicy") {
+      clause = buildVariantSomeStringClause(shopId, "inventoryPolicy", opNorm, value);
+    } else if (id === "variant.option1value") {
+      clause = buildVariantSomeStringClause(shopId, "option1Value", opNorm, value);
+    } else if (id === "variant.option2value") {
+      clause = buildVariantSomeStringClause(shopId, "option2Value", opNorm, value);
+    } else if (id === "variant.option3value") {
+      clause = buildVariantSomeStringClause(shopId, "option3Value", opNorm, value);
+    } else if (id === "variant.weightunit") {
+      clause = buildVariantSomeStringClause(shopId, "weightUnit", opNorm, value);
+    } else if (id === "variant.weight") {
+      clause = buildVariantSomeNumberClause(shopId, "weightGrams", opNorm, value);
+    } else if (
+      id === "variant.connectedinventorylocation" ||
+      id === "variant.inventorylocation"
+    ) {
+      clause = buildInventoryLocationClause(shopId, opNorm, value);
+    } else if (id === "product.category") {
+      clause = buildInsensitiveStringClause("categoryName", opNorm, value);
+    } else if (id === "product.description") {
+      clause = buildInsensitiveStringClause("description", opNorm, value);
+    } else if (id === "product.option1name") {
+      clause = buildInsensitiveStringClause("option1Name", opNorm, value);
+    } else if (id === "product.option2name") {
+      clause = buildInsensitiveStringClause("option2Name", opNorm, value);
+    } else if (id === "product.option3name") {
+      clause = buildInsensitiveStringClause("option3Name", opNorm, value);
+    } else if (id === "product.template") {
+      clause = buildInsensitiveStringClause("templateSuffix", opNorm, value);
+    } else if (
+      id === "product.searchenginevisibility" ||
+      id === "product.visibleonlinestore" ||
+      id === "product.visiblepos" ||
+      id === "variant.countryoforigin" ||
+      id === "variant.hstariffcode"
+    ) {
+      warnings.push(
+        `Filter "${filterId}" is not yet supported by the current sync payload.`,
+      );
+    } else {
+      warnings.push(`Unsupported filter "${filterId}" was ignored.`);
     }
 
-    // 10) Unsupported ids for FAST plane → ignore (SKU, barcode, etc.)
+    if (clause) andClauses.push(clause);
   }
 
-  return andClauses.length === 1 ? andClauses[0] : { AND: andClauses };
+  return {
+    where: andClauses.length === 1 ? andClauses[0] : { AND: andClauses },
+    warnings: uniqueStrings(warnings),
+  };
 }
 
-/* ─────────────────────────────
-   Express App
-───────────────────────────── */
+/* ──────────────────────────────────────────────────────────────
+ * Suggestions
+ * ────────────────────────────────────────────────────────────── */
+
+async function getFilterSuggestions(shopId, key, q, limit = 10) {
+  const safeLimit = Math.min(Math.max(Number(limit) || 10, 1), 25);
+  const term = normalizeString(q);
+  if (!term) return [];
+
+  const k = String(key || "").trim();
+
+  if (k === "product.handle") {
+    const rows = await prisma.productLite.findMany({
+      where: { shopId, handle: { contains: term, mode: "insensitive" } },
+      select: { handle: true },
+      orderBy: { id: "asc" },
+      take: safeLimit,
+    });
+    return uniqueStrings(rows.map((r) => r.handle));
+  }
+
+  if (k === "product.title") {
+    const rows = await prisma.productLite.findMany({
+      where: { shopId, title: { contains: term, mode: "insensitive" } },
+      select: { title: true },
+      orderBy: { id: "asc" },
+      take: safeLimit,
+    });
+    return uniqueStrings(rows.map((r) => r.title));
+  }
+
+  if (k === "product.vendor") {
+    const rows = await prisma.productLite.findMany({
+      where: { shopId, vendor: { contains: term, mode: "insensitive" } },
+      select: { vendor: true },
+      orderBy: { id: "asc" },
+      take: safeLimit,
+    });
+    return uniqueStrings(rows.map((r) => r.vendor));
+  }
+
+  if (k === "product.productType") {
+    const rows = await prisma.productLite.findMany({
+      where: { shopId, productType: { contains: term, mode: "insensitive" } },
+      select: { productType: true },
+      orderBy: { id: "asc" },
+      take: safeLimit,
+    });
+    return uniqueStrings(rows.map((r) => r.productType));
+  }
+
+  if (k === "product.category") {
+    const rows = await prisma.productLite.findMany({
+      where: { shopId, categoryName: { contains: term, mode: "insensitive" } },
+      select: { categoryName: true },
+      orderBy: { id: "asc" },
+      take: safeLimit,
+    });
+    return uniqueStrings(rows.map((r) => r.categoryName));
+  }
+
+  if (k === "product.description") {
+    const rows = await prisma.productLite.findMany({
+      where: { shopId, description: { contains: term, mode: "insensitive" } },
+      select: { description: true },
+      orderBy: { id: "asc" },
+      take: safeLimit,
+    });
+    return uniqueStrings(rows.map((r) => r.description));
+  }
+
+  if (k === "product.option1Name") {
+    const rows = await prisma.productLite.findMany({
+      where: { shopId, option1Name: { contains: term, mode: "insensitive" } },
+      select: { option1Name: true },
+      orderBy: { id: "asc" },
+      take: safeLimit,
+    });
+    return uniqueStrings(rows.map((r) => r.option1Name));
+  }
+
+  if (k === "product.option2Name") {
+    const rows = await prisma.productLite.findMany({
+      where: { shopId, option2Name: { contains: term, mode: "insensitive" } },
+      select: { option2Name: true },
+      orderBy: { id: "asc" },
+      take: safeLimit,
+    });
+    return uniqueStrings(rows.map((r) => r.option2Name));
+  }
+
+  if (k === "product.option3Name") {
+    const rows = await prisma.productLite.findMany({
+      where: { shopId, option3Name: { contains: term, mode: "insensitive" } },
+      select: { option3Name: true },
+      orderBy: { id: "asc" },
+      take: safeLimit,
+    });
+    return uniqueStrings(rows.map((r) => r.option3Name));
+  }
+
+  if (k === "product.tag") {
+    const searchTerms = parseLooseStringArray(term);
+    const effectiveTerm = searchTerms[0] ? searchTerms[0].toLowerCase() : "";
+
+    const rows = await prisma.productLite.findMany({
+      where: { shopId },
+      select: { tags: true },
+      orderBy: { id: "asc" },
+      take: 300,
+    });
+
+    const out = [];
+    const seen = new Set();
+
+    for (const row of rows) {
+      for (const tag of row.tags || []) {
+        const t = normalizeString(tag);
+        if (!t) continue;
+        if (effectiveTerm && !t.toLowerCase().includes(effectiveTerm)) continue;
+        if (seen.has(t)) continue;
+        seen.add(t);
+        out.push(t);
+        if (out.length >= safeLimit) return out;
+      }
+    }
+
+    return out;
+  }
+
+  if (k === "product.status") {
+    return ["active", "draft", "archived"].filter((s) =>
+      s.includes(term.toLowerCase()),
+    );
+  }
+
+  if (k === "product.collection") {
+    const rows = await prisma.productCollection.findMany({
+      where: {
+        shopId,
+        OR: [
+          { collectionTitle: { contains: term, mode: "insensitive" } },
+          { collectionHandle: { contains: term, mode: "insensitive" } },
+          { collectionId: { contains: term } },
+        ],
+      },
+      select: {
+        collectionTitle: true,
+        collectionHandle: true,
+        collectionId: true,
+      },
+      take: safeLimit * 3,
+      orderBy: { collectionId: "asc" },
+    });
+
+    return uniqueStrings(
+      rows.flatMap((r) => [r.collectionTitle, r.collectionHandle, r.collectionId]),
+    ).slice(0, safeLimit);
+  }
+
+  if (k === "variant.sku") {
+    const rows = await prisma.variantLite.findMany({
+      where: { shopId, sku: { contains: term, mode: "insensitive" } },
+      select: { sku: true },
+      orderBy: { variantId: "asc" },
+      take: safeLimit,
+    });
+    return uniqueStrings(rows.map((r) => r.sku));
+  }
+
+  if (k === "variant.barcode") {
+    const rows = await prisma.variantLite.findMany({
+      where: { shopId, barcode: { contains: term, mode: "insensitive" } },
+      select: { barcode: true },
+      orderBy: { variantId: "asc" },
+      take: safeLimit,
+    });
+    return uniqueStrings(rows.map((r) => r.barcode));
+  }
+
+  if (k === "variant.title") {
+    const rows = await prisma.variantLite.findMany({
+      where: { shopId, title: { contains: term, mode: "insensitive" } },
+      select: { title: true },
+      orderBy: { variantId: "asc" },
+      take: safeLimit,
+    });
+    return uniqueStrings(rows.map((r) => r.title));
+  }
+
+  if (k === "variant.inventoryPolicy") {
+    return ["deny", "continue"].filter((s) =>
+      s.includes(term.toLowerCase()),
+    );
+  }
+
+  if (k === "variant.weightUnit") {
+    return ["g", "kg", "oz", "lb"].filter((s) =>
+      s.includes(term.toLowerCase()),
+    );
+  }
+
+  if (k === "variant.option1Value") {
+    const rows = await prisma.variantLite.findMany({
+      where: { shopId, option1Value: { contains: term, mode: "insensitive" } },
+      select: { option1Value: true },
+      orderBy: { variantId: "asc" },
+      take: safeLimit,
+    });
+    return uniqueStrings(rows.map((r) => r.option1Value));
+  }
+
+  if (k === "variant.option2Value") {
+    const rows = await prisma.variantLite.findMany({
+      where: { shopId, option2Value: { contains: term, mode: "insensitive" } },
+      select: { option2Value: true },
+      orderBy: { variantId: "asc" },
+      take: safeLimit,
+    });
+    return uniqueStrings(rows.map((r) => r.option2Value));
+  }
+
+  if (k === "variant.option3Value") {
+    const rows = await prisma.variantLite.findMany({
+      where: { shopId, option3Value: { contains: term, mode: "insensitive" } },
+      select: { option3Value: true },
+      orderBy: { variantId: "asc" },
+      take: safeLimit,
+    });
+    return uniqueStrings(rows.map((r) => r.option3Value));
+  }
+
+  return [];
+}
+
+/* ──────────────────────────────────────────────────────────────
+ * Sync writers
+ * ────────────────────────────────────────────────────────────── */
+
+function buildProductTagRows(shopId, productId, tags) {
+  const cleanTags = uniqueStrings(
+    Array.isArray(tags) ? tags.map((t) => normalizeString(t)) : [],
+  );
+
+  return cleanTags.map((tag) => ({
+    shopId,
+    productId,
+    tag,
+  }));
+}
+
+function buildVariantRecordsFromProduct(shopId, productNode) {
+  const variantEdges = productNode?.variants?.edges || [];
+
+  return variantEdges
+    .map((edge) => edge?.node)
+    .filter(Boolean)
+    .map((variant) => {
+      const price = toNullableDecimalNumber(variant.price);
+      const compareAtPrice = toNullableDecimalNumber(variant.compareAtPrice);
+      const cost = null;
+
+      let profitMarginPct = null;
+      if (price != null && cost != null && price !== 0) {
+        profitMarginPct = ((price - cost) / price) * 100;
+      }
+
+      return {
+        shopId,
+        variantId: variant.id,
+        productId: productNode.id,
+        title: variant.title ?? null,
+        sku: variant.sku ?? null,
+        barcode: variant.barcode ?? null,
+        price,
+        compareAtPrice,
+        cost,
+        profitMarginPct,
+        taxable: typeof variant.taxable === "boolean" ? variant.taxable : null,
+        trackQuantity:
+          typeof variant.inventoryQuantity === "number" ? true : null,
+        requiresShipping:
+          typeof variant.requiresShipping === "boolean"
+            ? variant.requiresShipping
+            : null,
+        inventoryQty:
+          typeof variant.inventoryQuantity === "number"
+            ? variant.inventoryQuantity
+            : 0,
+        inventoryPolicy: variant.inventoryPolicy ?? null,
+        countryOfOrigin: null,
+        hsTariffCode: null,
+        weightGrams: weightToGrams(variant.weight, variant.weightUnit),
+        weightUnit: variant.weightUnit ?? null,
+        option1Value: selectedOptionValue(variant.selectedOptions, 0),
+        option2Value: selectedOptionValue(variant.selectedOptions, 1),
+        option3Value: selectedOptionValue(variant.selectedOptions, 2),
+      };
+    });
+}
+
+function buildVariantRollupData(variants) {
+  const variantCount = variants.length;
+
+  const inventoryValues = variants.map((v) => v.inventoryQty ?? 0);
+  const totalInventory = inventoryValues.reduce((sum, n) => sum + n, 0);
+
+  const priceValues = variants
+    .map((v) => (v.price != null ? Number(v.price) : null))
+    .filter((v) => v != null);
+
+  const compareAtValues = variants
+    .map((v) => (v.compareAtPrice != null ? Number(v.compareAtPrice) : null))
+    .filter((v) => v != null);
+
+  const costValues = variants
+    .map((v) => (v.cost != null ? Number(v.cost) : null))
+    .filter((v) => v != null);
+
+  return {
+    variantCount,
+    totalInventory,
+    minPrice: priceValues.length ? Math.min(...priceValues) : null,
+    maxPrice: priceValues.length ? Math.max(...priceValues) : null,
+    minCompareAtPrice: compareAtValues.length ? Math.min(...compareAtValues) : null,
+    maxCompareAtPrice: compareAtValues.length ? Math.max(...compareAtValues) : null,
+    minCost: costValues.length ? Math.min(...costValues) : null,
+    maxCost: costValues.length ? Math.max(...costValues) : null,
+    hasOutOfStockVariant: inventoryValues.some((n) => n <= 0),
+    hasInStockVariant: inventoryValues.some((n) => n > 0),
+  };
+}
+
+async function syncSingleProductGraphNode(shopId, productNode) {
+  const productId = productNode.id;
+  const optionNames = Array.isArray(productNode.options) ? productNode.options : [];
+
+  await prisma.productLite.upsert({
+    where: {
+      shopId_id: {
+        shopId,
+        id: productId,
+      },
+    },
+    update: {
+      title: productNode.title,
+      handle: productNode.handle,
+      status: toLowerStatus(productNode.status),
+      vendor: productNode.vendor ?? null,
+      productType: productNode.productType ?? null,
+
+      categoryId: productNode.category?.id ?? null,
+      categoryName: productNode.category?.name ?? null,
+      description: productNode.description ?? null,
+      templateSuffix: productNode.templateSuffix ?? null,
+
+      option1Name: optionNames[0]?.name ?? null,
+      option2Name: optionNames[1]?.name ?? null,
+      option3Name: optionNames[2]?.name ?? null,
+
+      tags: Array.isArray(productNode.tags) ? productNode.tags : [],
+
+      createdAtShopify: productNode.createdAt ? new Date(productNode.createdAt) : null,
+      updatedAtShopify: productNode.updatedAt ? new Date(productNode.updatedAt) : new Date(),
+      publishedAtShopify: productNode.publishedAt ? new Date(productNode.publishedAt) : null,
+    },
+    create: {
+      shopId,
+      id: productId,
+      title: productNode.title,
+      handle: productNode.handle,
+      status: toLowerStatus(productNode.status),
+      vendor: productNode.vendor ?? null,
+      productType: productNode.productType ?? null,
+
+      categoryId: productNode.category?.id ?? null,
+      categoryName: productNode.category?.name ?? null,
+      description: productNode.description ?? null,
+      templateSuffix: productNode.templateSuffix ?? null,
+
+      option1Name: optionNames[0]?.name ?? null,
+      option2Name: optionNames[1]?.name ?? null,
+      option3Name: optionNames[2]?.name ?? null,
+
+      tags: Array.isArray(productNode.tags) ? productNode.tags : [],
+
+      createdAtShopify: productNode.createdAt ? new Date(productNode.createdAt) : null,
+      updatedAtShopify: productNode.updatedAt ? new Date(productNode.updatedAt) : new Date(),
+      publishedAtShopify: productNode.publishedAt ? new Date(productNode.publishedAt) : null,
+    },
+  });
+
+  const tagRows = buildProductTagRows(shopId, productId, productNode.tags);
+
+  await prisma.productTag.deleteMany({
+    where: { shopId, productId },
+  });
+
+  if (tagRows.length > 0) {
+    await prisma.productTag.createMany({
+      data: tagRows,
+      skipDuplicates: true,
+    });
+  }
+
+  const variantRecords = buildVariantRecordsFromProduct(shopId, productNode);
+  const seenVariantIds = variantRecords.map((v) => v.variantId);
+
+  for (const variant of variantRecords) {
+    await prisma.variantLite.upsert({
+      where: {
+        shopId_variantId: {
+          shopId,
+          variantId: variant.variantId,
+        },
+      },
+      update: {
+        productId: variant.productId,
+        title: variant.title,
+        sku: variant.sku,
+        barcode: variant.barcode,
+        price: variant.price,
+        compareAtPrice: variant.compareAtPrice,
+        cost: variant.cost,
+        profitMarginPct: variant.profitMarginPct,
+        taxable: variant.taxable,
+        trackQuantity: variant.trackQuantity,
+        requiresShipping: variant.requiresShipping,
+        inventoryQty: variant.inventoryQty,
+        inventoryPolicy: variant.inventoryPolicy,
+        countryOfOrigin: variant.countryOfOrigin,
+        hsTariffCode: variant.hsTariffCode,
+        weightGrams: variant.weightGrams,
+        weightUnit: variant.weightUnit,
+        option1Value: variant.option1Value,
+        option2Value: variant.option2Value,
+        option3Value: variant.option3Value,
+      },
+      create: variant,
+    });
+  }
+
+  await prisma.variantLite.deleteMany({
+    where: {
+      shopId,
+      productId,
+      ...(seenVariantIds.length > 0
+        ? { variantId: { notIn: seenVariantIds } }
+        : {}),
+    },
+  });
+
+  const rollup = buildVariantRollupData(variantRecords);
+
+  await prisma.variantRollup.upsert({
+    where: {
+      shopId_productId: {
+        shopId,
+        productId,
+      },
+    },
+    update: rollup,
+    create: {
+      shopId,
+      productId,
+      ...rollup,
+    },
+  });
+}
+
+/* ──────────────────────────────────────────────────────────────
+ * Shopify sync query
+ * ────────────────────────────────────────────────────────────── */
+
+const SYNC_PRODUCTS_QUERY = `
+query SyncProducts($first: Int!, $after: String) {
+  products(first: $first, after: $after) {
+    edges {
+      cursor
+      node {
+        id
+        title
+        handle
+        status
+        vendor
+        productType
+        description
+        tags
+        createdAt
+        updatedAt
+        publishedAt
+        templateSuffix
+
+        category {
+          id
+          name
+        }
+
+        options {
+          name
+          values
+        }
+
+        variants(first: 100) {
+          edges {
+            node {
+              id
+              title
+              sku
+              barcode
+              price
+              compareAtPrice
+              inventoryQuantity
+              inventoryPolicy
+              taxable
+              requiresShipping
+              weight
+              weightUnit
+              selectedOptions {
+                name
+                value
+              }
+            }
+          }
+        }
+      }
+    }
+    pageInfo {
+      hasNextPage
+    }
+  }
+}
+`;
+
+/* ──────────────────────────────────────────────────────────────
+ * Express app
+ * ────────────────────────────────────────────────────────────── */
 
 const app = express();
 app.use(express.json());
 
-// PG-backed REST endpoints
 app.use("/api/pg", productsPgRouter);
-// app.use("/api/pg", bulkPgRouter);
-// app.use("/api/pg", historyPgRouter);
 app.use("/api/pg", syncPgRoutes);
 app.use("/api/webhooks/pg", webhooksPgRoutes);
 
-// Shopify OAuth + webhooks
 app.get(shopify.config.auth.path, shopify.auth.begin());
 
 app.get(
@@ -426,14 +1307,11 @@ app.post(
   shopify.processWebhooks({ webhookHandlers: PrivacyWebhookHandlers }),
 );
 
-// All /api/* routes (including /api/graphql) require an authenticated session
 app.use("/api/*", shopify.validateAuthenticatedSession());
 
-/* ─────────────────────────────
-   GRAPHQL API
-   - syncProductsToDb mutation
-   - productsByFilter query (FAST plane via Prisma)
-───────────────────────────── */
+/* ──────────────────────────────────────────────────────────────
+ * GraphQL-lite endpoint
+ * ────────────────────────────────────────────────────────────── */
 
 app.post("/api/graphql", async (req, res) => {
   try {
@@ -452,81 +1330,38 @@ app.post("/api/graphql", async (req, res) => {
     }
 
     const client = new shopify.api.clients.Graphql({ session });
-    const shopDomain = session.shop; // "my-shop.myshopify.com"
-    const shopId = shopDomain; // Use this directly as ProductLite.shopId
+    const shopId = session.shop;
 
-    /* ────────────
-       1) syncProductsToDb
-       ──────────── */
+    if (query.includes("filterSuggestions")) {
+      const input = variables?.input ?? {};
+      const suggestions = await getFilterSuggestions(
+        shopId,
+        input.key,
+        input.q,
+        input.limit,
+      );
+
+      return res.json({
+        data: {
+          filterSuggestions: suggestions,
+        },
+      });
+    }
+
     if (query.includes("syncProductsToDb")) {
       const first = Number(variables?.first ?? 50);
       const after = variables?.after ?? null;
 
-      const response = await client.request(
-        `
-        query SyncProducts($first: Int!, $after: String) {
-          products(first: $first, after: $after) {
-            edges {
-              cursor
-              node {
-                id
-                title
-                handle
-                status
-                vendor
-                productType
-                tags
-                createdAt
-                updatedAt
-                publishedAt
-              }
-            }
-            pageInfo {
-              hasNextPage
-            }
-          }
-        }
-      `,
-        { variables: { first, after } },
-      );
+      const response = await client.request(SYNC_PRODUCTS_QUERY, {
+        variables: { first, after },
+      });
 
       const edges = response?.data?.products?.edges || [];
 
       for (const edge of edges) {
-        const p = edge.node;
-
-        await prisma.productLite.upsert({
-          where: {
-            shopId_id: {
-              shopId,
-              id: p.id,
-            },
-          },
-          update: {
-            title: p.title,
-            handle: p.handle,
-            status: p.status,
-            vendor: p.vendor ?? null,
-            productType: p.productType ?? null,
-            tags: p.tags ?? [],
-            createdAtShopify: p.createdAt ? new Date(p.createdAt) : null,
-            updatedAtShopify: p.updatedAt ? new Date(p.updatedAt) : new Date(),
-            publishedAtShopify: p.publishedAt ? new Date(p.publishedAt) : null,
-          },
-          create: {
-            shopId,
-            id: p.id, // Shopify product GID
-            title: p.title,
-            handle: p.handle,
-            status: p.status,
-            vendor: p.vendor ?? null,
-            productType: p.productType ?? null,
-            tags: p.tags ?? [],
-            createdAtShopify: p.createdAt ? new Date(p.createdAt) : null,
-            updatedAtShopify: p.updatedAt ? new Date(p.updatedAt) : new Date(),
-            publishedAtShopify: p.publishedAt ? new Date(p.publishedAt) : null,
-          },
-        });
+        const productNode = edge?.node;
+        if (!productNode?.id) continue;
+        await syncSingleProductGraphNode(shopId, productNode);
       }
 
       const pageInfo = response?.data?.products?.pageInfo;
@@ -545,19 +1380,16 @@ app.post("/api/graphql", async (req, res) => {
       });
     }
 
-    /* ────────────
-       2) productsByFilter (FAST plane via Prisma)
-       Uses ProductLite + VariantRollup
-       ──────────── */
     if (query.includes("productsByFilter")) {
       const input = variables?.input ?? {};
       const first = Number(input.first ?? 50);
       const after = input.after ?? null;
-
-      const filterExpr = input.filter ?? input.filterExpr ?? input.filterGroup ?? null;
       const pageSize = Math.min(Math.max(first, 1), 250);
 
-      const where = buildProductLiteWhereFromFilterExpr(shopId, filterExpr);
+      const filterExpr =
+        input.filter ?? input.filterExpr ?? input.filterGroup ?? null;
+
+      const { where, warnings } = buildWhereAndWarnings(shopId, filterExpr);
 
       const cursor =
         after != null
@@ -570,7 +1402,7 @@ app.post("/api/graphql", async (req, res) => {
           variantRollup: true,
         },
         orderBy: {
-          updatedAtShopify: "desc",
+          id: "asc",
         },
         take: pageSize + 1,
         ...(cursor
@@ -580,6 +1412,8 @@ app.post("/api/graphql", async (req, res) => {
             }
           : {}),
       });
+
+      const totalMatched = await prisma.productLite.count({ where });
 
       const slice = products.slice(0, pageSize);
       const hasNextPage = products.length > pageSize;
@@ -599,26 +1433,25 @@ app.post("/api/graphql", async (req, res) => {
         updatedAtShopify: p.updatedAtShopify,
       }));
 
-      const guardrail = {
-        candidateCount: items.length,
-        candidateLimit: pageSize,
-        candidateLimitHit: hasNextPage,
-      };
-
       return res.json({
         data: {
           productsByFilter: {
             items,
             nextCursor,
-            mode: "FAST",
-            guardrail,
-            warnings: [],
+            mode: "FAST_ONLY",
+            guardrail: {
+              totalMatched,
+              shownCount: slice.length,
+              pageSize,
+              hasMore: hasNextPage,
+              limited: hasNextPage,
+            },
+            warnings,
           },
         },
       });
     }
 
-    // Everything else is still unsupported
     return res.status(400).json({
       errors: [{ message: "Unsupported GraphQL operation" }],
     });
@@ -635,11 +1468,11 @@ app.post("/api/graphql", async (req, res) => {
   }
 });
 
-/* ─────────────────────────────
-   REST (legacy demo endpoint)
-───────────────────────────── */
+/* ──────────────────────────────────────────────────────────────
+ * Legacy demo route
+ * ────────────────────────────────────────────────────────────── */
 
-app.post("/api/products", async (req, res) => {
+app.post("/api/products", async (_req, res) => {
   let status = 200;
   let error = null;
 
@@ -654,9 +1487,9 @@ app.post("/api/products", async (req, res) => {
   res.status(status).send({ success: status === 200, error });
 });
 
-/* ─────────────────────────────
-   Static + App Shell
-───────────────────────────── */
+/* ──────────────────────────────────────────────────────────────
+ * Static app shell
+ * ────────────────────────────────────────────────────────────── */
 
 app.use(shopify.cspHeaders());
 app.use(serveStatic(STATIC_PATH, { index: false }));
@@ -672,9 +1505,9 @@ app.use("/*", shopify.ensureInstalledOnShop(), async (_req, res) => {
     );
 });
 
-/* ─────────────────────────────
-   Start Server
-───────────────────────────── */
+/* ──────────────────────────────────────────────────────────────
+ * Start server
+ * ────────────────────────────────────────────────────────────── */
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);

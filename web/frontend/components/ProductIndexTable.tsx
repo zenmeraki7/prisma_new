@@ -30,10 +30,21 @@ function formatUpdatedAt(value: string | Date | null | undefined): string {
   return d.toLocaleString();
 }
 
+function normalizeStatus(status: string | null | undefined): string {
+  return String(status || "").trim().toLowerCase();
+}
+
 function statusTone(status: string): "success" | "attention" | "info" {
-  if (status === "ACTIVE") return "success";
-  if (status === "DRAFT") return "attention";
+  const s = normalizeStatus(status);
+  if (s === "active") return "success";
+  if (s === "draft") return "attention";
   return "info";
+}
+
+function statusLabel(status: string): string {
+  const s = normalizeStatus(status);
+  if (!s) return "—";
+  return s.toUpperCase();
 }
 
 export const ProductIndexTable: React.FC<ProductIndexTableProps> = ({
@@ -49,9 +60,8 @@ export const ProductIndexTable: React.FC<ProductIndexTableProps> = ({
   const { selectedResources, allResourcesSelected, handleSelectionChange } =
     useIndexResourceState(products as any);
 
-  // Polaris expects NonEmptyArray
   const headings = [
-    { title: "" }, // thumbnail
+    { title: "" },
     { title: "Title" },
     { title: "Vendor" },
     { title: "Status" },
@@ -64,7 +74,6 @@ export const ProductIndexTable: React.FC<ProductIndexTableProps> = ({
   const rowMarkup = products.map((p, index) => {
     const isSelected = selectedResources.includes(p.id);
 
-    // IMPORTANT: your Polaris typings want onClick: () => unknown (no event)
     const handleTitleClick = () => {
       navigate(`/products/${encodeURIComponent(p.id)}`);
     };
@@ -76,7 +85,6 @@ export const ProductIndexTable: React.FC<ProductIndexTableProps> = ({
         selected={isSelected}
         position={index}
       >
-        {/* 1) Thumbnail */}
         <IndexTable.Cell>
           <Thumbnail
             source={p.hasImages ? ImageIcon : ""}
@@ -85,7 +93,6 @@ export const ProductIndexTable: React.FC<ProductIndexTableProps> = ({
           />
         </IndexTable.Cell>
 
-        {/* 2) Title (clickable, doesn't toggle selection) */}
         <IndexTable.Cell>
           <div onClick={(e) => e.stopPropagation()}>
             <Button
@@ -98,7 +105,6 @@ export const ProductIndexTable: React.FC<ProductIndexTableProps> = ({
           </div>
         </IndexTable.Cell>
 
-        {/* 3) Vendor */}
         <IndexTable.Cell>
           <Text
             as="span"
@@ -109,12 +115,10 @@ export const ProductIndexTable: React.FC<ProductIndexTableProps> = ({
           </Text>
         </IndexTable.Cell>
 
-        {/* 4) Status */}
         <IndexTable.Cell>
-          <Badge tone={statusTone(p.status)}>{p.status}</Badge>
+          <Badge tone={statusTone(p.status)}>{statusLabel(p.status)}</Badge>
         </IndexTable.Cell>
 
-        {/* 5) Inventory */}
         <IndexTable.Cell>
           <Text as="span" numeric>
             {p.totalInventory != null ? `${p.totalInventory} in stock` : "—"}
@@ -122,14 +126,11 @@ export const ProductIndexTable: React.FC<ProductIndexTableProps> = ({
           <Text as="span" variant="bodySm" tone="subdued">
             <br />
             {p.variantCount != null
-              ? `${p.variantCount} ${
-                  p.variantCount === 1 ? "variant" : "variants"
-                }`
+              ? `${p.variantCount} ${p.variantCount === 1 ? "variant" : "variants"}`
               : "— variants"}
           </Text>
         </IndexTable.Cell>
 
-        {/* 6) Product type */}
         <IndexTable.Cell>
           <Text
             as="span"
@@ -140,7 +141,6 @@ export const ProductIndexTable: React.FC<ProductIndexTableProps> = ({
           </Text>
         </IndexTable.Cell>
 
-        {/* 7) Tags */}
         <IndexTable.Cell>
           {p.tags?.length ? (
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -162,7 +162,6 @@ export const ProductIndexTable: React.FC<ProductIndexTableProps> = ({
           )}
         </IndexTable.Cell>
 
-        {/* 8) Last updated */}
         <IndexTable.Cell>
           <Text as="span" variant="bodySm" tone="subdued">
             {formatUpdatedAt(p.updatedAtShopify)}

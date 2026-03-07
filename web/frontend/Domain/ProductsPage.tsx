@@ -1,5 +1,3 @@
-// FILE: web/frontend/pages/ProductsPage.tsx
-
 import React from "react";
 import { Page, Layout, Card, BlockStack } from "@shopify/polaris";
 import { useAppBridge } from "@shopify/app-bridge-react";
@@ -20,7 +18,7 @@ export const ProductsPage: React.FC = () => {
   const app = useAppBridge();
 
   const [draftFilters, setDraftFilters] = React.useState<DraftFilter[]>([]);
-  const [searchText, setSearchText] = React.useState<string>("");
+  const [searchText, setSearchText] = React.useState("");
 
   const [appliedExpr, setAppliedExpr] = React.useState<FilterExpr | null>(null);
   const [requestKey, setRequestKey] = React.useState(0);
@@ -29,76 +27,76 @@ export const ProductsPage: React.FC = () => {
     (search: string, filters: DraftFilter[]): FilterExpr | null => {
       const leaves: FilterExpr[] = [];
 
-      const s = (search ?? "").trim();
-      if (s) {
-        // ✅ backend expands product.search across title/vendor/handle/type/tags
-        leaves.push(field("product.search" as any, "CONTAINS" as any, s));
+      const trimmedSearch = (search ?? "").trim();
+      if (trimmedSearch) {
+        leaves.push(field("product.search" as any, "CONTAINS" as any, trimmedSearch));
       }
 
       for (const f of Array.isArray(filters) ? filters : []) {
         leaves.push(field(f.key as any, f.op as any, f.value));
       }
 
-      return leaves.length ? andGroup(leaves) : null;
+      return leaves.length > 0 ? andGroup(leaves) : null;
     },
     [],
   );
 
-  /**
-   * ✅ SEARCH APPLY (single click)
-   * We accept nextSearch so we never read stale state.
-   */
+  const applyCurrentState = React.useCallback(
+    (nextSearch: string, nextFilters: DraftFilter[]) => {
+      const safeFilters = Array.isArray(nextFilters) ? nextFilters : [];
+      setAppliedExpr(buildExprFrom(nextSearch, safeFilters));
+      setRequestKey((x) => x + 1);
+    },
+    [buildExprFrom],
+  );
+
   const onApplySearch = React.useCallback(
     (nextSearch: string) => {
       setSearchText(nextSearch);
-      setAppliedExpr(buildExprFrom(nextSearch, draftFilters));
-      setRequestKey((x) => x + 1);
+      applyCurrentState(nextSearch, draftFilters);
     },
-    [buildExprFrom, draftFilters],
+    [applyCurrentState, draftFilters],
   );
 
-  /**
-   * ✅ SEARCH RESET ONLY
-   */
   const onResetSearchOnly = React.useCallback(() => {
     const nextSearch = "";
     setSearchText(nextSearch);
-    setAppliedExpr(buildExprFrom(nextSearch, draftFilters));
-    setRequestKey((x) => x + 1);
-  }, [buildExprFrom, draftFilters]);
+    applyCurrentState(nextSearch, draftFilters);
+  }, [applyCurrentState, draftFilters]);
 
-  /**
-   * ✅ FILTERS APPLY IMMEDIATELY
-   */
   const onDraftFiltersChangeApplyNow = React.useCallback(
     (next: DraftFilter[]) => {
       const safe = Array.isArray(next) ? next : [];
       setDraftFilters(safe);
-
-      // compute from NEXT filters (no stale)
-      setAppliedExpr(buildExprFrom(searchText, safe));
-      setRequestKey((x) => x + 1);
+      applyCurrentState(searchText, safe);
     },
-    [buildExprFrom, searchText],
+    [applyCurrentState, searchText],
   );
 
   const fetchSuggestions = React.useCallback(async (key: string, q: string) => {
-    const resp = await fetch("/api/graphql", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        query: `
-          query FilterSuggestions($input: FilterSuggestionsInput!) {
-            filterSuggestions(input: $input)
-          }
-        `,
-        variables: { input: { key, q, limit: 10 } },
-      }),
-    });
+    try {
+      const resp = await fetch("/api/graphql", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query: `
+            query FilterSuggestions($input: FilterSuggestionsInput!) {
+              filterSuggestions(input: $input)
+            }
+          `,
+          variables: { input: { key, q, limit: 10 } },
+        }),
+      });
 
-    if (!resp.ok) return [];
-    const json = await resp.json();
-    return (json?.data?.filterSuggestions || []) as string[];
+      const json = await resp.json().catch(() => null);
+
+      if (!resp.ok) return [];
+      if (json?.errors?.length) return [];
+
+      return (json?.data?.filterSuggestions || []) as string[];
+    } catch {
+      return [];
+    }
   }, []);
 
   const {
@@ -147,7 +145,11 @@ export const ProductsPage: React.FC = () => {
             />
 
             <div style={{ padding: 16 }}>
-              <FilterExecutionAlert mode={mode} guardrail={guardrail} warnings={warnings} />
+              <FilterExecutionAlert
+                mode={mode}
+                guardrail={guardrail}
+                warnings={warnings}
+              />
             </div>
           </Card>
         </Layout.Section>
@@ -171,7 +173,9 @@ export const ProductsPage: React.FC = () => {
           )}
 
           {loadingMore && items.length > 0 && (
-            <div style={{ paddingTop: 12, textAlign: "center" }}>Loading more…</div>
+            <div style={{ paddingTop: 12, textAlign: "center" }}>
+              Loading more…
+            </div>
           )}
         </Layout.Section>
       </Layout>

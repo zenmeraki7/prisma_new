@@ -7,63 +7,109 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-/// Shop state tracking
 model ShopState {
-  shopId         String    @id
-  fastReady      Boolean   @default(false)
+  shopId         String   @id
+  fastReady      Boolean  @default(false)
   fastLastSyncAt DateTime?
-  fastRevision   Int       @default(0)
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  fastRevision   Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 }
 
-/// Main FAST-plane product table
+/**
+ * Product-first FAST table.
+ * One row per Shopify product per shop.
+ */
 model ProductLite {
-  shopId             String
-  title              String
-  handle             String
-  status             String
-  vendor             String?
-  productType        String?
-  tags               String[]                   @default([])
-  hasImages          Boolean                    @default(false)
-  createdAtShopify   DateTime?
-  updatedAtShopify   DateTime?
-  publishedAtShopify DateTime?
-  updatedAt          DateTime                   @default(now()) @updatedAt
-  id                 String                     @id
-  collections        ProductCollection[]
-  inventoryByLoc     ProductInventoryLocation[]
-  optionValues       ProductOptionValue[]
-  tagsJoin           ProductTag[]
-  variants           VariantLite[]
-  variantRollup      VariantRollup?
+  shopId                   String
+  id                       String
 
-  @@unique([shopId, id])
+  title                    String
+  handle                   String
+  status                   String
+
+  vendor                   String?
+  productType              String?
+  categoryId               String?
+  categoryName             String?
+
+  description              String?
+  templateSuffix           String?
+
+  seoHidden                Boolean                    @default(false)
+  visibleOnlineStore       Boolean                    @default(false)
+  visiblePos               Boolean                    @default(false)
+
+  option1Name              String?
+  option2Name              String?
+  option3Name              String?
+
+  tags                     String[]                   @default([])
+  hasImages                Boolean                    @default(false)
+
+  createdAtShopify         DateTime?
+  updatedAtShopify         DateTime?
+  publishedAtShopify       DateTime?
+
+  updatedAt                DateTime                   @default(now()) @updatedAt
+
+  collections              ProductCollection[]
+  inventoryByLoc           ProductInventoryLocation[]
+  optionValues             ProductOptionValue[]
+  tagsJoin                 ProductTag[]
+  variants                 VariantLite[]
+  variantRollup            VariantRollup?
+
+  @@id([shopId, id])
   @@index([shopId, updatedAtShopify(sort: Desc)])
   @@index([shopId, title])
+  @@index([shopId, handle])
+  @@index([shopId, status])
+  @@index([shopId, vendor])
+  @@index([shopId, productType])
+  @@index([shopId, categoryName])
+  @@index([shopId, visibleOnlineStore])
+  @@index([shopId, visiblePos])
+  @@index([shopId, seoHidden])
+  @@index([shopId, templateSuffix])
 }
 
-/// Rollup per product for fast filters
+/**
+ * Rollup per product for fast product-level filters.
+ */
 model VariantRollup {
-  shopId               String
-  productId            String
-  variantCount         Int         @default(0)
-  totalInventory       Int         @default(0)
-  minPrice             Decimal?    @db.Decimal(18, 6)
-  maxPrice             Decimal?    @db.Decimal(18, 6)
-  hasOutOfStockVariant Boolean     @default(false)
-  hasInStockVariant    Boolean     @default(false)
-  updatedAt            DateTime    @default(now()) @updatedAt
-  product              ProductLite @relation(fields: [shopId, productId], references: [shopId, id])
+  shopId                   String
+  productId                String
+
+  variantCount             Int         @default(0)
+  totalInventory           Int         @default(0)
+
+  minPrice                 Decimal?    @db.Decimal(18, 6)
+  maxPrice                 Decimal?    @db.Decimal(18, 6)
+
+  minCompareAtPrice        Decimal?    @db.Decimal(18, 6)
+  maxCompareAtPrice        Decimal?    @db.Decimal(18, 6)
+
+  minCost                  Decimal?    @db.Decimal(18, 6)
+  maxCost                  Decimal?    @db.Decimal(18, 6)
+
+  hasOutOfStockVariant     Boolean     @default(false)
+  hasInStockVariant        Boolean     @default(false)
+
+  updatedAt                DateTime    @default(now()) @updatedAt
+
+  product                  ProductLite @relation(fields: [shopId, productId], references: [shopId, id], onDelete: Cascade)
 
   @@id([shopId, productId])
   @@index([shopId, totalInventory])
+  @@index([shopId, variantCount])
   @@index([shopId, minPrice])
   @@index([shopId, maxPrice])
 }
 
-/// Job ledger for background jobs
+/**
+ * Job ledger
+ */
 model JobLedger {
   id         String    @id @default(cuid())
   shopId     String
@@ -80,19 +126,17 @@ model JobLedger {
   @@index([shopId, createdAt])
 }
 
-/// Optional relational tags table
 model ProductTag {
   id        BigInt      @id @default(autoincrement())
   shopId    String
   productId String
   tag       String
-  product   ProductLite @relation(fields: [shopId, productId], references: [shopId, id])
+  product   ProductLite @relation(fields: [shopId, productId], references: [shopId, id], onDelete: Cascade)
 
   @@unique([shopId, productId, tag])
   @@index([shopId, tag, productId])
 }
 
-/// Collections mapping table
 model ProductCollection {
   id               BigInt      @id @default(autoincrement())
   shopId           String
@@ -100,66 +144,110 @@ model ProductCollection {
   collectionId     String
   collectionHandle String?
   collectionTitle  String?
-  product          ProductLite @relation(fields: [shopId, productId], references: [shopId, id])
+  product          ProductLite @relation(fields: [shopId, productId], references: [shopId, id], onDelete: Cascade)
 
   @@unique([shopId, productId, collectionId])
   @@index([shopId, collectionId, productId])
+  @@index([shopId, collectionHandle, productId])
+  @@index([shopId, collectionTitle, productId])
 }
 
-/// Per-variant FAST table
+/**
+ * Variant-first FAST table.
+ * One row per Shopify variant per shop.
+ */
 model VariantLite {
-  id              BigInt      @id @default(autoincrement())
-  shopId          String
-  variantId       String
-  productId       String
-  sku             String?
-  barcode         String?
-  price           Decimal     @db.Decimal(18, 6)
-  compareAtPrice  Decimal?
-  cost            Decimal?
-  taxable         Boolean?
-  trackQuantity   Boolean?
-  inventoryQty    Int
-  inventoryPolicy String?
-  weightGrams     Int?
-  weightUnit      String?
-  option1Value    String?
-  option2Value    String?
-  option3Value    String?
-  product         ProductLite @relation(fields: [shopId, productId], references: [shopId, id])
+  id                    BigInt      @id @default(autoincrement())
+  shopId                String
+  variantId             String
+  productId             String
+
+  title                 String?
+
+  sku                   String?
+  barcode               String?
+
+  price                 Decimal?    @db.Decimal(18, 6)
+  compareAtPrice        Decimal?    @db.Decimal(18, 6)
+  cost                  Decimal?    @db.Decimal(18, 6)
+
+  /**
+   * Materialized for fast filtering/sorting.
+   * You can also recompute from price/cost during sync.
+   * Example: ((price - cost) / NULLIF(price, 0)) * 100
+   */
+  profitMarginPct       Decimal?    @db.Decimal(9, 4)
+
+  taxable               Boolean?
+  trackQuantity         Boolean?
+  requiresShipping      Boolean?
+
+  inventoryQty          Int         @default(0)
+  inventoryPolicy       String?
+
+  countryOfOrigin       String?
+  hsTariffCode          String?
+
+  weightGrams           Int?
+  weightUnit            String?
+
+  option1Value          String?
+  option2Value          String?
+  option3Value          String?
+
+  product               ProductLite @relation(fields: [shopId, productId], references: [shopId, id], onDelete: Cascade)
 
   @@unique([shopId, variantId])
   @@index([shopId, productId])
   @@index([shopId, sku])
   @@index([shopId, barcode])
+  @@index([shopId, title])
   @@index([shopId, price])
+  @@index([shopId, compareAtPrice])
+  @@index([shopId, cost])
+  @@index([shopId, profitMarginPct])
+  @@index([shopId, inventoryQty])
+  @@index([shopId, inventoryPolicy])
+  @@index([shopId, trackQuantity])
+  @@index([shopId, taxable])
+  @@index([shopId, requiresShipping])
+  @@index([shopId, countryOfOrigin])
+  @@index([shopId, hsTariffCode])
+  @@index([shopId, weightUnit])
 }
 
-/// Product option values (1,2,3)
+/**
+ * Optional helper table if you want product option values independent of variants.
+ */
 model ProductOptionValue {
   id          BigInt      @id @default(autoincrement())
   shopId      String
   productId   String
   optionIndex Int
   value       String
-  product     ProductLite @relation(fields: [shopId, productId], references: [shopId, id])
+  product     ProductLite @relation(fields: [shopId, productId], references: [shopId, id], onDelete: Cascade)
 
   @@unique([shopId, productId, optionIndex, value])
   @@index([shopId, optionIndex, value, productId])
 }
 
-/// Inventory per location
+/**
+ * Inventory/location linkage for product-level location filters.
+ * Add locationName so UI suggestions/filtering need not depend on external joins.
+ */
 model ProductInventoryLocation {
   id            BigInt      @id @default(autoincrement())
   shopId        String
   productId     String
   locationId    String
+  locationName  String?
   hasInventory  Boolean     @default(false)
   totalQuantity Int?
-  product       ProductLite @relation(fields: [shopId, productId], references: [shopId, id])
+  product       ProductLite @relation(fields: [shopId, productId], references: [shopId, id], onDelete: Cascade)
 
   @@unique([shopId, productId, locationId])
   @@index([shopId, locationId, productId])
+  @@index([shopId, locationName, productId])
 }
 
 enum JobType {

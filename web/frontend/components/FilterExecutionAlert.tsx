@@ -1,5 +1,3 @@
-// FILE: web/frontend/components/FilterExecutionAlert.tsx
-
 import React from "react";
 import {
   Banner,
@@ -18,22 +16,13 @@ interface FilterExecutionAlertProps {
   guardrail: FilterGuardrailInfo | null;
   warnings: string[];
 
-  // Optional debug-only stats
   astDepth?: number | null;
   fastFiltersCount?: number | null;
   snapshotFiltersCount?: number | null;
 
-  // When true, show developer-level details.
   debug?: boolean;
 }
 
-/**
- * Merchant-facing execution notice with optional dev diagnostics.
- *
- * Example copy for merchants:
- * - "Showing results from snapshot analysis"
- * - "Large filter – results may be partial"
- */
 export const FilterExecutionAlert: React.FC<FilterExecutionAlertProps> = ({
   mode,
   guardrail,
@@ -43,59 +32,60 @@ export const FilterExecutionAlert: React.FC<FilterExecutionAlertProps> = ({
   snapshotFiltersCount,
   debug = false,
 }) => {
-  const tone = modeToTone(mode, guardrail);
+  const normalizedMode = normalizeDisplayMode(mode);
+  const tone = modeToTone(normalizedMode, guardrail);
 
-  // If we’re in FAST_ONLY and no guardrail issue, we can be quiet.
   const isNoop =
-    mode === "FAST_ONLY" &&
-    !guardrail?.candidateLimitHit &&
+    normalizedMode === "FAST_ONLY" &&
+    !guardrail?.limited &&
     warnings.length === 0 &&
     !debug;
 
   if (isNoop) return null;
 
   return (
-    <Banner title={titleForMode(mode, guardrail)} tone={tone}>
+    <Banner title={titleForMode(normalizedMode, guardrail)} tone={tone}>
       <BlockStack gap="100">
-        {/* Merchant-friendly headline row */}
         <InlineStack gap="200" align="space-between" blockAlign="center">
           <InlineStack gap="200" blockAlign="center">
-            <Badge>{modeLabel(mode)}</Badge>
+            <Badge>{modeLabel(normalizedMode)}</Badge>
             <Text as="span" variant="bodySm">
-              {subtitleForMode(mode, guardrail)}
+              {subtitleForMode(normalizedMode, guardrail)}
             </Text>
           </InlineStack>
 
           {guardrail && (
             <Text as="span" variant="bodySm">
-              Matching products: {guardrail.candidateCount}
-              {` / `}
-              {guardrail.candidateLimit}
-              {guardrail.candidateLimitHit &&
-                " – showing a limited set of results"}
+              {guardrail.limited
+                ? `Matching products: ${formatNumber(
+                    guardrail.totalMatched,
+                  )} — showing ${formatNumber(guardrail.shownCount)}`
+                : `Matching products: ${formatNumber(guardrail.totalMatched)}`}
             </Text>
           )}
         </InlineStack>
 
-        {/* Optional merchant-visible warnings */}
         {warnings.length > 0 && (
           <BlockStack gap="050">
-            {warnings.map((w, idx) => (
-              <Text key={idx} as="p" variant="bodySm">
-                • {w}
+            {warnings.map((warning, index) => (
+              <Text key={index} as="p" variant="bodySm">
+                • {warning}
               </Text>
             ))}
           </BlockStack>
         )}
 
-        {/* Debug diagnostics for you / support, not for merchants */}
         {debug && (
           <BlockStack gap="050">
             <Text as="p" variant="bodySm" tone="subdued">
-              Debug: AST depth{" "}
-              {astDepth ?? "–"} • FAST leaves{" "}
-              {fastFiltersCount ?? "–"} • SNAPSHOT leaves{" "}
+              Debug: AST depth {astDepth ?? "–"} • FAST leaves{" "}
+              {fastFiltersCount ?? "–"} • OTHER leaves{" "}
               {snapshotFiltersCount ?? "–"}
+              {guardrail
+                ? ` • matched ${guardrail.totalMatched} • shown ${guardrail.shownCount} • pageSize ${guardrail.pageSize} • hasMore ${String(
+                    guardrail.hasMore,
+                  )} • limited ${String(guardrail.limited)}`
+                : ""}
             </Text>
           </BlockStack>
         )}
@@ -104,15 +94,25 @@ export const FilterExecutionAlert: React.FC<FilterExecutionAlertProps> = ({
   );
 };
 
+function normalizeDisplayMode(mode: FilterExecutionMode): FilterExecutionMode {
+  if (mode === "SNAPSHOT_ONLY") return "AUTO";
+  return mode;
+}
+
+function formatNumber(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "0";
+  return new Intl.NumberFormat().format(value);
+}
+
 function modeLabel(mode: FilterExecutionMode): string {
   switch (mode) {
     case "FAST_ONLY":
       return "Fast search";
-    case "SNAPSHOT_ONLY":
-      return "Snapshot search";
     case "HYBRID":
-      return "Hybrid search";
+      return "Advanced search";
     case "AUTO":
+      return "Automatic";
+    case "SNAPSHOT_ONLY":
     default:
       return "Automatic";
   }
@@ -122,17 +122,18 @@ function titleForMode(
   mode: FilterExecutionMode,
   guardrail: FilterGuardrailInfo | null,
 ): string {
-  if (guardrail?.candidateLimitHit) {
+  if (guardrail?.limited) {
     return "Showing a limited set of results";
   }
+
   switch (mode) {
     case "FAST_ONLY":
       return "Live search applied";
-    case "SNAPSHOT_ONLY":
-      return "Snapshot-based search applied";
     case "HYBRID":
-      return "Combined search applied";
+      return "Advanced search applied";
     case "AUTO":
+      return "Filter applied";
+    case "SNAPSHOT_ONLY":
     default:
       return "Filter applied";
   }
@@ -142,18 +143,20 @@ function subtitleForMode(
   mode: FilterExecutionMode,
   guardrail: FilterGuardrailInfo | null,
 ): string {
-  if (guardrail?.candidateLimitHit) {
-    return "Your filters match many products. For performance, we’re showing a limited subset.";
+  if (guardrail?.limited) {
+    return `Your filters match many products. For performance, we’re showing ${formatNumber(
+      guardrail.shownCount,
+    )} of ${formatNumber(guardrail.totalMatched)} matching products.`;
   }
 
   switch (mode) {
     case "FAST_ONLY":
       return "Results are calculated from the latest product data.";
-    case "SNAPSHOT_ONLY":
-      return "Results are taken from a saved snapshot. Some very recent changes might not be included.";
     case "HYBRID":
-      return "Some filters use a saved snapshot, others are calculated live.";
+      return "Some filters require a broader search strategy for accurate results.";
     case "AUTO":
+      return "Filters are applied automatically based on performance and accuracy.";
+    case "SNAPSHOT_ONLY":
     default:
       return "Filters are applied automatically based on performance and accuracy.";
   }
@@ -163,10 +166,11 @@ function modeToTone(
   mode: FilterExecutionMode,
   guardrail: FilterGuardrailInfo | undefined | null,
 ): "info" | "success" | "warning" | "critical" {
-  if (guardrail?.candidateLimitHit) {
+  if (guardrail?.limited) {
     return "warning";
   }
+
   if (mode === "FAST_ONLY") return "success";
-  if (mode === "SNAPSHOT_ONLY" || mode === "HYBRID") return "info";
+  if (mode === "HYBRID" || mode === "AUTO") return "info";
   return "info";
 }
