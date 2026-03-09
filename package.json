@@ -28,6 +28,7 @@
     "web/frontend"
   ],
   "devDependencies": {
+    "@types/express": "^5.0.6",
     "@vitejs/plugin-react": "^5.1.2",
     "tsx": "^4.21.0"
   }

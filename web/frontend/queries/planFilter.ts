@@ -1,7 +1,7 @@
 // web/frontend/queries/planFilter.ts
 import { graphqlRequest } from "../../lib/graphqlClient";
 import type { AppBridgeState } from "@shopify/app-bridge-react";
-import type { FilterExpr } from "../../lib/filters/dsl";
+import type { FilterExpr } from "../lib/filters/dsl";
 
 export type FilterExecutionMode = "FAST_ONLY" | "SNAPSHOT";
 
