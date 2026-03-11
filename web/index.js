@@ -1,12 +1,10 @@
+// FILE: web/index.js
+
 import "dotenv/config";
 import { join } from "path";
 import { readFileSync } from "fs";
 import express from "express";
 import serveStatic from "serve-static";
-
-import { productsPgRouter } from "./routes/products.pg.js";
-import syncPgRoutes from "./routes/sync.pg.js";
-import webhooksPgRoutes from "./routes/webhooks.pg.js";
 
 import shopify from "./shopify.js";
 import productCreator from "./product-creator.js";
@@ -23,9 +21,9 @@ const STATIC_PATH =
     ? `${process.cwd()}/frontend/dist`
     : `${process.cwd()}/frontend/`;
 
-/* ──────────────────────────────────────────────────────────────
- * Bootstrap
- * ────────────────────────────────────────────────────────────── */
+/* -------------------------------------------------------------------------- */
+/* Bootstrap                                                                   */
+/* -------------------------------------------------------------------------- */
 
 async function testDbConnection() {
   try {
@@ -36,9 +34,9 @@ async function testDbConnection() {
   }
 }
 
-/* ──────────────────────────────────────────────────────────────
- * Primitive helpers
- * ────────────────────────────────────────────────────────────── */
+/* -------------------------------------------------------------------------- */
+/* Primitive helpers                                                           */
+/* -------------------------------------------------------------------------- */
 
 function parseNumberInput(value) {
   if (value === "" || value == null) return null;
@@ -147,9 +145,13 @@ function selectedOptionValue(selectedOptions, index) {
   return selectedOptions[index]?.value ?? null;
 }
 
-/* ──────────────────────────────────────────────────────────────
- * Operator normalization
- * ────────────────────────────────────────────────────────────── */
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/* -------------------------------------------------------------------------- */
+/* Operator normalization                                                      */
+/* -------------------------------------------------------------------------- */
 
 const OP_MAP = new Map([
   ["CONTAINS", "contains"],
@@ -191,9 +193,9 @@ function normalizeOp(op) {
   return OP_MAP.get(s) || OP_MAP.get(s.toUpperCase()) || null;
 }
 
-/* ──────────────────────────────────────────────────────────────
- * Filter AST normalization
- * ────────────────────────────────────────────────────────────── */
+/* -------------------------------------------------------------------------- */
+/* Filter AST normalization                                                    */
+/* -------------------------------------------------------------------------- */
 
 function normalizeLeaf(node) {
   if (!node || typeof node !== "object") return null;
@@ -237,9 +239,9 @@ function normalizeToLeaves(expr, out) {
   }
 }
 
-/* ──────────────────────────────────────────────────────────────
- * Prisma clause builders
- * ────────────────────────────────────────────────────────────── */
+/* -------------------------------------------------------------------------- */
+/* Prisma clause builders                                                      */
+/* -------------------------------------------------------------------------- */
 
 function buildInsensitiveStringClause(column, opNorm, value) {
   if (opNorm === "is_set") return { [column]: { not: null } };
@@ -364,7 +366,12 @@ function buildNumericFieldClause(column, opNorm, value) {
 
   if (opNorm === "eq") return { [column]: n };
   if (opNorm === "neq") return { NOT: { [column]: n } };
-  if (opNorm === "gt" || opNorm === "gte" || opNorm === "lt" || opNorm === "lte") {
+  if (
+    opNorm === "gt" ||
+    opNorm === "gte" ||
+    opNorm === "lt" ||
+    opNorm === "lte"
+  ) {
     return { [column]: { [opNorm]: n } };
   }
 
@@ -388,7 +395,12 @@ function buildDateFieldClause(column, opNorm, value) {
   if (!d) return null;
 
   if (opNorm === "eq") return { [column]: d };
-  if (opNorm === "gt" || opNorm === "gte" || opNorm === "lt" || opNorm === "lte") {
+  if (
+    opNorm === "gt" ||
+    opNorm === "gte" ||
+    opNorm === "lt" ||
+    opNorm === "lte"
+  ) {
     return { [column]: { [opNorm]: d } };
   }
 
@@ -573,9 +585,9 @@ function buildInventoryLocationClause(shopId, opNorm, value) {
   return null;
 }
 
-/* ──────────────────────────────────────────────────────────────
- * Filter compiler
- * ────────────────────────────────────────────────────────────── */
+/* -------------------------------------------------------------------------- */
+/* Filter compiler                                                             */
+/* -------------------------------------------------------------------------- */
 
 function buildWhereAndWarnings(shopId, filterExpr) {
   const andClauses = [{ shopId }];
@@ -612,13 +624,29 @@ function buildWhereAndWarnings(shopId, filterExpr) {
           ],
         };
       }
-    } else if (id === "product.status" || id === "status" || id === "product_status") {
+    } else if (
+      id === "product.status" ||
+      id === "status" ||
+      id === "product_status"
+    ) {
       clause = buildCaseInsensitiveExactListClause("status", opNorm, value);
-    } else if (id === "product.title" || id === "title" || id === "product_title") {
+    } else if (
+      id === "product.title" ||
+      id === "title" ||
+      id === "product_title"
+    ) {
       clause = buildInsensitiveStringClause("title", opNorm, value);
-    } else if (id === "product.handle" || id === "handle" || id === "product_handle") {
+    } else if (
+      id === "product.handle" ||
+      id === "handle" ||
+      id === "product_handle"
+    ) {
       clause = buildInsensitiveStringClause("handle", opNorm, value);
-    } else if (id === "product.vendor" || id === "vendor" || id === "product_vendor") {
+    } else if (
+      id === "product.vendor" ||
+      id === "vendor" ||
+      id === "product_vendor"
+    ) {
       clause = buildInsensitiveStringClause("vendor", opNorm, value);
     } else if (
       id === "product.producttype" ||
@@ -631,8 +659,11 @@ function buildWhereAndWarnings(shopId, filterExpr) {
       const v = normalizeString(value);
       if (opNorm === "eq" && v) clause = { id: v };
       else if (opNorm === "contains" && v) clause = { id: { contains: v } };
-      else if (opNorm === "starts_with" && v) clause = { id: { startsWith: v } };
-      else if (opNorm === "ends_with" && v) clause = { id: { endsWith: v } };
+      else if (opNorm === "starts_with" && v) {
+        clause = { id: { startsWith: v } };
+      } else if (opNorm === "ends_with" && v) {
+        clause = { id: { endsWith: v } };
+      }
     } else if (
       id === "product.tag" ||
       id === "product.tags" ||
@@ -679,13 +710,23 @@ function buildWhereAndWarnings(shopId, filterExpr) {
     } else if (id === "variant.title") {
       clause = buildVariantSomeStringClause(shopId, "title", opNorm, value);
     } else if (id === "variant.compareatprice") {
-      clause = buildVariantSomeNumberClause(shopId, "compareAtPrice", opNorm, value);
+      clause = buildVariantSomeNumberClause(
+        shopId,
+        "compareAtPrice",
+        opNorm,
+        value,
+      );
     } else if (id === "variant.cost") {
       clause = buildVariantSomeNumberClause(shopId, "cost", opNorm, value);
     } else if (id === "variant.price") {
       clause = buildVariantSomeNumberClause(shopId, "price", opNorm, value);
     } else if (id === "variant.profitmargin") {
-      clause = buildVariantSomeNumberClause(shopId, "profitMarginPct", opNorm, value);
+      clause = buildVariantSomeNumberClause(
+        shopId,
+        "profitMarginPct",
+        opNorm,
+        value,
+      );
     } else if (id === "variant.trackquantity") {
       clause = buildVariantSomeBooleanClause(shopId, "trackQuantity", value);
     } else if (id === "variant.chargetax") {
@@ -696,9 +737,19 @@ function buildWhereAndWarnings(shopId, filterExpr) {
       id === "variant.inventoryquantity" ||
       id === "variant.inventory_quantity"
     ) {
-      clause = buildVariantSomeNumberClause(shopId, "inventoryQty", opNorm, value);
+      clause = buildVariantSomeNumberClause(
+        shopId,
+        "inventoryQty",
+        opNorm,
+        value,
+      );
     } else if (id === "variant.inventorypolicy") {
-      clause = buildVariantSomeStringClause(shopId, "inventoryPolicy", opNorm, value);
+      clause = buildVariantSomeStringClause(
+        shopId,
+        "inventoryPolicy",
+        opNorm,
+        value,
+      );
     } else if (id === "variant.option1value") {
       clause = buildVariantSomeStringClause(shopId, "option1Value", opNorm, value);
     } else if (id === "variant.option2value") {
@@ -749,9 +800,9 @@ function buildWhereAndWarnings(shopId, filterExpr) {
   };
 }
 
-/* ──────────────────────────────────────────────────────────────
- * Suggestions
- * ────────────────────────────────────────────────────────────── */
+/* -------------------------------------------------------------------------- */
+/* Suggestions                                                                 */
+/* -------------------------------------------------------------------------- */
 
 async function getFilterSuggestions(shopId, key, q, limit = 10) {
   const safeLimit = Math.min(Math.max(Number(limit) || 10, 1), 25);
@@ -851,9 +902,6 @@ async function getFilterSuggestions(shopId, key, q, limit = 10) {
   }
 
   if (k === "product.tag") {
-    const searchTerms = parseLooseStringArray(term);
-    const effectiveTerm = searchTerms[0] ? searchTerms[0].toLowerCase() : "";
-
     const rows = await prisma.productLite.findMany({
       where: { shopId },
       select: { tags: true },
@@ -861,6 +909,7 @@ async function getFilterSuggestions(shopId, key, q, limit = 10) {
       take: 300,
     });
 
+    const effectiveTerm = term.toLowerCase();
     const out = [];
     const seen = new Set();
 
@@ -984,9 +1033,9 @@ async function getFilterSuggestions(shopId, key, q, limit = 10) {
   return [];
 }
 
-/* ──────────────────────────────────────────────────────────────
- * Sync writers
- * ────────────────────────────────────────────────────────────── */
+/* -------------------------------------------------------------------------- */
+/* Sync writers                                                                */
+/* -------------------------------------------------------------------------- */
 
 function buildProductTagRows(shopId, productId, tags) {
   const cleanTags = uniqueStrings(
@@ -1016,6 +1065,12 @@ function buildVariantRecordsFromProduct(shopId, productNode) {
         profitMarginPct = ((price - cost) / price) * 100;
       }
 
+      const weightValue =
+        variant.inventoryItem?.measurement?.weight?.value ?? null;
+
+      const weightUnit =
+        variant.inventoryItem?.measurement?.weight?.unit ?? null;
+
       return {
         shopId,
         variantId: variant.id,
@@ -1030,10 +1085,7 @@ function buildVariantRecordsFromProduct(shopId, productNode) {
         taxable: typeof variant.taxable === "boolean" ? variant.taxable : null,
         trackQuantity:
           typeof variant.inventoryQuantity === "number" ? true : null,
-        requiresShipping:
-          typeof variant.requiresShipping === "boolean"
-            ? variant.requiresShipping
-            : null,
+        requiresShipping: null,
         inventoryQty:
           typeof variant.inventoryQuantity === "number"
             ? variant.inventoryQuantity
@@ -1041,8 +1093,8 @@ function buildVariantRecordsFromProduct(shopId, productNode) {
         inventoryPolicy: variant.inventoryPolicy ?? null,
         countryOfOrigin: null,
         hsTariffCode: null,
-        weightGrams: weightToGrams(variant.weight, variant.weightUnit),
-        weightUnit: variant.weightUnit ?? null,
+        weightGrams: weightToGrams(weightValue, weightUnit),
+        weightUnit: weightUnit ?? null,
         option1Value: selectedOptionValue(variant.selectedOptions, 0),
         option2Value: selectedOptionValue(variant.selectedOptions, 1),
         option3Value: selectedOptionValue(variant.selectedOptions, 2),
@@ -1052,7 +1104,6 @@ function buildVariantRecordsFromProduct(shopId, productNode) {
 
 function buildVariantRollupData(variants) {
   const variantCount = variants.length;
-
   const inventoryValues = variants.map((v) => v.inventoryQty ?? 0);
   const totalInventory = inventoryValues.reduce((sum, n) => sum + n, 0);
 
@@ -1073,8 +1124,12 @@ function buildVariantRollupData(variants) {
     totalInventory,
     minPrice: priceValues.length ? Math.min(...priceValues) : null,
     maxPrice: priceValues.length ? Math.max(...priceValues) : null,
-    minCompareAtPrice: compareAtValues.length ? Math.min(...compareAtValues) : null,
-    maxCompareAtPrice: compareAtValues.length ? Math.max(...compareAtValues) : null,
+    minCompareAtPrice: compareAtValues.length
+      ? Math.min(...compareAtValues)
+      : null,
+    maxCompareAtPrice: compareAtValues.length
+      ? Math.max(...compareAtValues)
+      : null,
     minCost: costValues.length ? Math.min(...costValues) : null,
     maxCost: costValues.length ? Math.max(...costValues) : null,
     hasOutOfStockVariant: inventoryValues.some((n) => n <= 0),
@@ -1085,6 +1140,9 @@ function buildVariantRollupData(variants) {
 async function syncSingleProductGraphNode(shopId, productNode) {
   const productId = productNode.id;
   const optionNames = Array.isArray(productNode.options) ? productNode.options : [];
+  const tagRows = buildProductTagRows(shopId, productId, productNode.tags);
+  const variantRecords = buildVariantRecordsFromProduct(shopId, productNode);
+  const rollup = buildVariantRollupData(variantRecords);
 
   await prisma.productLite.upsert({
     where: {
@@ -1099,21 +1157,23 @@ async function syncSingleProductGraphNode(shopId, productNode) {
       status: toLowerStatus(productNode.status),
       vendor: productNode.vendor ?? null,
       productType: productNode.productType ?? null,
-
       categoryId: productNode.category?.id ?? null,
       categoryName: productNode.category?.name ?? null,
       description: productNode.description ?? null,
       templateSuffix: productNode.templateSuffix ?? null,
-
       option1Name: optionNames[0]?.name ?? null,
       option2Name: optionNames[1]?.name ?? null,
       option3Name: optionNames[2]?.name ?? null,
-
       tags: Array.isArray(productNode.tags) ? productNode.tags : [],
-
-      createdAtShopify: productNode.createdAt ? new Date(productNode.createdAt) : null,
-      updatedAtShopify: productNode.updatedAt ? new Date(productNode.updatedAt) : new Date(),
-      publishedAtShopify: productNode.publishedAt ? new Date(productNode.publishedAt) : null,
+      createdAtShopify: productNode.createdAt
+        ? new Date(productNode.createdAt)
+        : null,
+      updatedAtShopify: productNode.updatedAt
+        ? new Date(productNode.updatedAt)
+        : new Date(),
+      publishedAtShopify: productNode.publishedAt
+        ? new Date(productNode.publishedAt)
+        : null,
     },
     create: {
       shopId,
@@ -1123,25 +1183,25 @@ async function syncSingleProductGraphNode(shopId, productNode) {
       status: toLowerStatus(productNode.status),
       vendor: productNode.vendor ?? null,
       productType: productNode.productType ?? null,
-
       categoryId: productNode.category?.id ?? null,
       categoryName: productNode.category?.name ?? null,
       description: productNode.description ?? null,
       templateSuffix: productNode.templateSuffix ?? null,
-
       option1Name: optionNames[0]?.name ?? null,
       option2Name: optionNames[1]?.name ?? null,
       option3Name: optionNames[2]?.name ?? null,
-
       tags: Array.isArray(productNode.tags) ? productNode.tags : [],
-
-      createdAtShopify: productNode.createdAt ? new Date(productNode.createdAt) : null,
-      updatedAtShopify: productNode.updatedAt ? new Date(productNode.updatedAt) : new Date(),
-      publishedAtShopify: productNode.publishedAt ? new Date(productNode.publishedAt) : null,
+      createdAtShopify: productNode.createdAt
+        ? new Date(productNode.createdAt)
+        : null,
+      updatedAtShopify: productNode.updatedAt
+        ? new Date(productNode.updatedAt)
+        : new Date(),
+      publishedAtShopify: productNode.publishedAt
+        ? new Date(productNode.publishedAt)
+        : null,
     },
   });
-
-  const tagRows = buildProductTagRows(shopId, productId, productNode.tags);
 
   await prisma.productTag.deleteMany({
     where: { shopId, productId },
@@ -1154,54 +1214,19 @@ async function syncSingleProductGraphNode(shopId, productNode) {
     });
   }
 
-  const variantRecords = buildVariantRecordsFromProduct(shopId, productNode);
-  const seenVariantIds = variantRecords.map((v) => v.variantId);
-
-  for (const variant of variantRecords) {
-    await prisma.variantLite.upsert({
-      where: {
-        shopId_variantId: {
-          shopId,
-          variantId: variant.variantId,
-        },
-      },
-      update: {
-        productId: variant.productId,
-        title: variant.title,
-        sku: variant.sku,
-        barcode: variant.barcode,
-        price: variant.price,
-        compareAtPrice: variant.compareAtPrice,
-        cost: variant.cost,
-        profitMarginPct: variant.profitMarginPct,
-        taxable: variant.taxable,
-        trackQuantity: variant.trackQuantity,
-        requiresShipping: variant.requiresShipping,
-        inventoryQty: variant.inventoryQty,
-        inventoryPolicy: variant.inventoryPolicy,
-        countryOfOrigin: variant.countryOfOrigin,
-        hsTariffCode: variant.hsTariffCode,
-        weightGrams: variant.weightGrams,
-        weightUnit: variant.weightUnit,
-        option1Value: variant.option1Value,
-        option2Value: variant.option2Value,
-        option3Value: variant.option3Value,
-      },
-      create: variant,
-    });
-  }
-
   await prisma.variantLite.deleteMany({
     where: {
       shopId,
       productId,
-      ...(seenVariantIds.length > 0
-        ? { variantId: { notIn: seenVariantIds } }
-        : {}),
     },
   });
 
-  const rollup = buildVariantRollupData(variantRecords);
+  if (variantRecords.length > 0) {
+    await prisma.variantLite.createMany({
+      data: variantRecords,
+      skipDuplicates: true,
+    });
+  }
 
   await prisma.variantRollup.upsert({
     where: {
@@ -1219,9 +1244,9 @@ async function syncSingleProductGraphNode(shopId, productNode) {
   });
 }
 
-/* ──────────────────────────────────────────────────────────────
- * Shopify sync query
- * ────────────────────────────────────────────────────────────── */
+/* -------------------------------------------------------------------------- */
+/* Shopify sync query                                                          */
+/* -------------------------------------------------------------------------- */
 
 const SYNC_PRODUCTS_QUERY = `
 query SyncProducts($first: Int!, $after: String) {
@@ -1264,9 +1289,16 @@ query SyncProducts($first: Int!, $after: String) {
               inventoryQuantity
               inventoryPolicy
               taxable
-              requiresShipping
-              weight
-              weightUnit
+
+              inventoryItem {
+                measurement {
+                  weight {
+                    value
+                    unit
+                  }
+                }
+              }
+
               selectedOptions {
                 name
                 value
@@ -1283,16 +1315,12 @@ query SyncProducts($first: Int!, $after: String) {
 }
 `;
 
-/* ──────────────────────────────────────────────────────────────
- * Express app
- * ────────────────────────────────────────────────────────────── */
+/* -------------------------------------------------------------------------- */
+/* Express app                                                                 */
+/* -------------------------------------------------------------------------- */
 
 const app = express();
 app.use(express.json());
-
-app.use("/api/pg", productsPgRouter);
-app.use("/api/pg", syncPgRoutes);
-app.use("/api/webhooks/pg", webhooksPgRoutes);
 
 app.get(shopify.config.auth.path, shopify.auth.begin());
 
@@ -1309,9 +1337,9 @@ app.post(
 
 app.use("/api/*", shopify.validateAuthenticatedSession());
 
-/* ──────────────────────────────────────────────────────────────
- * GraphQL-lite endpoint
- * ────────────────────────────────────────────────────────────── */
+/* -------------------------------------------------------------------------- */
+/* GraphQL-lite endpoint                                                       */
+/* -------------------------------------------------------------------------- */
 
 app.post("/api/graphql", async (req, res) => {
   try {
@@ -1330,7 +1358,7 @@ app.post("/api/graphql", async (req, res) => {
     }
 
     const client = new shopify.api.clients.Graphql({ session });
-    const shopId = session.shop;
+    const shopId = String(session.shop);
 
     if (query.includes("filterSuggestions")) {
       const input = variables?.input ?? {};
@@ -1349,7 +1377,7 @@ app.post("/api/graphql", async (req, res) => {
     }
 
     if (query.includes("syncProductsToDb")) {
-      const first = Number(variables?.first ?? 50);
+      const first = Math.min(Math.max(Number(variables?.first ?? 10), 1), 10);
       const after = variables?.after ?? null;
 
       const response = await client.request(SYNC_PRODUCTS_QUERY, {
@@ -1361,7 +1389,36 @@ app.post("/api/graphql", async (req, res) => {
       for (const edge of edges) {
         const productNode = edge?.node;
         if (!productNode?.id) continue;
-        await syncSingleProductGraphNode(shopId, productNode);
+
+        let lastError = null;
+        let synced = false;
+
+        for (let attempt = 1; attempt <= 3; attempt += 1) {
+          try {
+            await syncSingleProductGraphNode(shopId, productNode);
+            synced = true;
+            break;
+          } catch (err) {
+            lastError = err;
+            const msg = String(err?.message || err);
+
+            const retryable =
+              msg.includes("Unable to start a transaction in the given time") ||
+              msg.includes("timeout") ||
+              msg.includes("Timed out") ||
+              msg.includes("Too many connections");
+
+            if (!retryable || attempt === 3) {
+              throw err;
+            }
+
+            await sleep(150 * attempt);
+          }
+        }
+
+        if (!synced && lastError) {
+          throw lastError;
+        }
       }
 
       const pageInfo = response?.data?.products?.pageInfo;
@@ -1468,9 +1525,9 @@ app.post("/api/graphql", async (req, res) => {
   }
 });
 
-/* ──────────────────────────────────────────────────────────────
- * Legacy demo route
- * ────────────────────────────────────────────────────────────── */
+/* -------------------------------------------------------------------------- */
+/* Legacy demo route                                                           */
+/* -------------------------------------------------------------------------- */
 
 app.post("/api/products", async (_req, res) => {
   let status = 200;
@@ -1487,9 +1544,9 @@ app.post("/api/products", async (_req, res) => {
   res.status(status).send({ success: status === 200, error });
 });
 
-/* ──────────────────────────────────────────────────────────────
- * Static app shell
- * ────────────────────────────────────────────────────────────── */
+/* -------------------------------------------------------------------------- */
+/* Static app shell                                                            */
+/* -------------------------------------------------------------------------- */
 
 app.use(shopify.cspHeaders());
 app.use(serveStatic(STATIC_PATH, { index: false }));
@@ -1505,9 +1562,9 @@ app.use("/*", shopify.ensureInstalledOnShop(), async (_req, res) => {
     );
 });
 
-/* ──────────────────────────────────────────────────────────────
- * Start server
- * ────────────────────────────────────────────────────────────── */
+/* -------------------------------------------------------------------------- */
+/* Start server                                                                */
+/* -------------------------------------------------------------------------- */
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);

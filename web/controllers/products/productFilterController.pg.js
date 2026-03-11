@@ -1,7 +1,5 @@
 // FILE: web/controllers/products/productFilterController.pg.js
 
-// FILE: web/controllers/products/productFilterController.pg.js
-
 import { pool } from "../../db/postgres/pool.js";
 import {
   PRESET_KEYS,
@@ -10,30 +8,29 @@ import {
   fetchVariantsPage,
 } from "../../services/productService/productFilterService.pg.js";
 
-/**
- * Normalize pagination + sort from query/body.
- */
 function parseListParams(req) {
-  const page = Number(req.query.page ?? req.body.page ?? 1) || 1;
-  const pageSize = Number(req.query.pageSize ?? req.body.pageSize ?? 50) || 50;
+  const page = Number(req.query.page ?? req.body?.page ?? 1) || 1;
+  const pageSize = Number(req.query.pageSize ?? req.body?.pageSize ?? 50) || 50;
 
-  const sortKey = (req.query.sortKey ?? req.body.sortKey) || null;
-  const sortDirection = (req.query.sortDirection ?? req.body.sortDirection) || null;
+  const sortKey = (req.query.sortKey ?? req.body?.sortKey) || null;
+  const sortDirection = (req.query.sortDirection ?? req.body?.sortDirection) || null;
 
   return { page, pageSize, sortKey, sortDirection };
 }
 
-/**
- * Product-first listing endpoint.
- *
- * Expects:
- *  - req.shopId  (numeric shops.id – however you store it)
- *  - req.body.filters   // DSL FilterGroup
- *  - optional query params: page, pageSize, sortKey, sortDirection
- */
+function resolveShopId(req, res) {
+  return (
+    req.shopId ??
+    req.user?.shopId ??
+    res.locals.shopId ??
+    req.body?.shopId ??
+    null
+  );
+}
+
 export async function getProductsPg(req, res, next) {
   try {
-    const shopId = req.shopId;
+    const shopId = resolveShopId(req, res);
     if (!shopId) {
       return res.status(400).json({ error: "shopId missing on request context" });
     }
@@ -62,17 +59,9 @@ export async function getProductsPg(req, res, next) {
   }
 }
 
-/**
- * Variant-first listing endpoint.
- *
- * Expects:
- *  - req.shopId
- *  - req.body.filters    // DSL FilterGroup
- *  - optional query params: page, pageSize, sortKey, sortDirection
- */
 export async function getVariantsPg(req, res, next) {
   try {
-    const shopId = req.shopId;
+    const shopId = resolveShopId(req, res);
     if (!shopId) {
       return res.status(400).json({ error: "shopId missing on request context" });
     }
@@ -101,12 +90,6 @@ export async function getVariantsPg(req, res, next) {
   }
 }
 
-/**
- * Example preset endpoint – returns the filter DSL for a preset.
- * Frontend can consume this DSL directly as if user built it.
- *
- * GET /api/products/presets/:key
- */
 export async function getPresetFilter(req, res, next) {
   try {
     const { key } = req.params;

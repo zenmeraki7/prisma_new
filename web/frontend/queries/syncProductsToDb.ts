@@ -19,6 +19,10 @@ const SYNC_PRODUCTS_MUTATION = /* GraphQL */ `
   }
 `;
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function syncProductsToDbRequest(
   _app: AppBridgeState,
   params: {
@@ -26,7 +30,7 @@ export async function syncProductsToDbRequest(
     after?: string | null;
   } = {},
 ): Promise<SyncProductsResult> {
-  const first = params.first ?? 50;
+  const first = params.first ?? 10;
   const after = params.after ?? null;
 
   const response = await fetch("/api/graphql", {
@@ -40,17 +44,26 @@ export async function syncProductsToDbRequest(
     }),
   });
 
-  const json = await response.json().catch(() => null);
+  const text = await response.text();
+  let json: any = null;
+
+  try {
+    json = text ? JSON.parse(text) : null;
+  } catch {
+    throw new Error(
+      `Sync request failed: ${response.status} ${response.statusText} – non-JSON response`,
+    );
+  }
 
   if (!response.ok) {
     throw new Error(
-      `Sync request failed: ${response.status} ${response.statusText} – ${JSON.stringify(json)}`
+      `Sync request failed: ${response.status} ${response.statusText} – ${JSON.stringify(json)}`,
     );
   }
 
   if (json?.errors?.length) {
     throw new Error(
-      `GraphQL errors from syncProductsToDb: ${JSON.stringify(json.errors, null, 2)}`
+      `GraphQL errors from syncProductsToDb: ${JSON.stringify(json.errors, null, 2)}`,
     );
   }
 
@@ -73,13 +86,17 @@ export async function syncAllProductsToDb(
 
   while (hasNextPage) {
     const res = await syncProductsToDbRequest(app, {
-      first: 100,
+      first: 10,
       after,
     });
 
     totalSynced += res.synced;
     hasNextPage = Boolean(res.hasNextPage);
     after = res.nextCursor ?? null;
+
+    if (hasNextPage) {
+      await sleep(150);
+    }
   }
 
   return { totalSynced };
