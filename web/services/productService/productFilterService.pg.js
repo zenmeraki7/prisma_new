@@ -3,43 +3,6 @@
 import { OPS, REGISTRY_BY_KEY } from "./filterRegistry.server.js";
 import logger from "../../utils/logger.server.js";
 
-/**
- * @typedef {"STRING"|"NUMBER"|"BOOLEAN"|"DATE"|"ENUM"} FilterValueType
- */
-
-/**
- * @typedef {Object} FilterCondition
- * @property {string} key
- * @property {string} operator
- * @property {*} value
- */
-
-/**
- * @typedef {Object} FilterGroup
- * @property {"AND"|"OR"} operator
- * @property {Array<FilterGroup|FilterCondition>} conditions
- */
-
-/**
- * @typedef {Object} ProductFilterParams
- * @property {string|number} shopId
- * @property {FilterGroup} [filterConfig]
- * @property {string|null} [sortKey]
- * @property {string|null} [sortDirection]
- * @property {number} [page]
- * @property {number} [pageSize]
- */
-
-/**
- * @typedef {Object} VariantFilterParams
- * @property {string|number} shopId
- * @property {FilterGroup} [filterConfig]
- * @property {string|null} [sortKey]
- * @property {string|null} [sortDirection]
- * @property {number} [page]
- * @property {number} [pageSize]
- */
-
 export const MAX_PAGE_SIZE = 250;
 export const MAX_FILTER_DEPTH = 8;
 export const MAX_IN_VALUES = 500;
@@ -151,6 +114,10 @@ export const SORT_DEFS = Object.freeze({
 const ALLOWED_DIRECTIONS = new Set(["ASC", "DESC"]);
 const ALLOWED_SORT_KEYS = new Set(Object.keys(SORT_DEFS));
 
+/* -------------------------------------------------------------------------- */
+/* Presets                                                                     */
+/* -------------------------------------------------------------------------- */
+
 export const PRESET_KEYS = Object.freeze({
   LOW_INVENTORY_VARIANT: "LOW_INVENTORY_VARIANT",
   LOW_INVENTORY_PRODUCT: "LOW_INVENTORY_PRODUCT",
@@ -168,18 +135,22 @@ export const PRESET_KEYS = Object.freeze({
 export function buildPresetFilterGroup(presetKey, options = {}) {
   const threshold =
     typeof options.threshold === "number" ? options.threshold : 5;
-  const discountThreshold =
-    typeof options.discountThreshold === "number"
-      ? options.discountThreshold
-      : 20;
 
   switch (presetKey) {
     case PRESET_KEYS.LOW_INVENTORY_VARIANT:
       return {
         operator: "AND",
         conditions: [
-          { key: OPS.VARIANT_INVENTORY_QUANTITY, operator: "LT", value: threshold },
-          { key: OPS.VARIANT_TRACK_QUANTITY, operator: "IS", value: true },
+          {
+            key: OPS.VARIANT_INVENTORY_QUANTITY,
+            operator: "LT",
+            value: threshold,
+          },
+          {
+            key: OPS.VARIANT_TRACK_QUANTITY,
+            operator: "IS",
+            value: true,
+          },
         ],
       };
 
@@ -187,8 +158,16 @@ export function buildPresetFilterGroup(presetKey, options = {}) {
       return {
         operator: "AND",
         conditions: [
-          { key: OPS.PRODUCT_TOTAL_INVENTORY, operator: "LT", value: threshold },
-          { key: OPS.PRODUCT_STATUS, operator: "EQ", value: "active" },
+          {
+            key: OPS.PRODUCT_TOTAL_INVENTORY,
+            operator: "LT",
+            value: threshold,
+          },
+          {
+            key: OPS.PRODUCT_STATUS,
+            operator: "EQ",
+            value: "active",
+          },
         ],
       };
 
@@ -196,67 +175,117 @@ export function buildPresetFilterGroup(presetKey, options = {}) {
       return {
         operator: "AND",
         conditions: [
-          { key: OPS.PRODUCT_SEO_HIDDEN, operator: "IS", value: true },
-          { key: OPS.PRODUCT_STATUS, operator: "EQ", value: "active" },
+          {
+            key: OPS.PRODUCT_SEO_HIDDEN,
+            operator: "IS",
+            value: true,
+          },
+          {
+            key: OPS.PRODUCT_STATUS,
+            operator: "EQ",
+            value: "active",
+          },
         ],
       };
 
     case PRESET_KEYS.MISSING_IMAGES:
       return {
         operator: "AND",
-        conditions: [{ key: OPS.PRODUCT_IMAGE_COUNT, operator: "EQ", value: 0 }],
+        conditions: [
+          {
+            key: OPS.PRODUCT_IMAGE_COUNT,
+            operator: "EQ",
+            value: 0,
+          },
+        ],
       };
 
     case PRESET_KEYS.NO_SKU:
       return {
         operator: "AND",
-        conditions: [{ key: OPS.VARIANT_SKU, operator: "IS_EMPTY", value: null }],
+        conditions: [
+          {
+            key: OPS.VARIANT_SKU,
+            operator: "IS_EMPTY",
+            value: null,
+          },
+        ],
       };
 
     case PRESET_KEYS.NO_BARCODE:
       return {
         operator: "AND",
-        conditions: [{ key: OPS.VARIANT_BARCODE, operator: "IS_EMPTY", value: null }],
+        conditions: [
+          {
+            key: OPS.VARIANT_BARCODE,
+            operator: "IS_EMPTY",
+            value: null,
+          },
+        ],
       };
 
     case PRESET_KEYS.DRAFT_PRODUCTS:
       return {
         operator: "AND",
-        conditions: [{ key: OPS.PRODUCT_STATUS, operator: "EQ", value: "draft" }],
+        conditions: [
+          {
+            key: OPS.PRODUCT_STATUS,
+            operator: "EQ",
+            value: "draft",
+          },
+        ],
       };
 
     case PRESET_KEYS.ARCHIVED_PRODUCTS:
       return {
         operator: "AND",
-        conditions: [{ key: OPS.PRODUCT_STATUS, operator: "EQ", value: "archived" }],
+        conditions: [
+          {
+            key: OPS.PRODUCT_STATUS,
+            operator: "EQ",
+            value: "archived",
+          },
+        ],
       };
 
     case PRESET_KEYS.OUT_OF_STOCK:
       return {
         operator: "AND",
         conditions: [
-          { key: OPS.PRODUCT_TOTAL_INVENTORY, operator: "LTE", value: 0 },
-          { key: OPS.PRODUCT_STATUS, operator: "EQ", value: "active" },
+          {
+            key: OPS.PRODUCT_TOTAL_INVENTORY,
+            operator: "LTE",
+            value: 0,
+          },
+          {
+            key: OPS.PRODUCT_STATUS,
+            operator: "EQ",
+            value: "active",
+          },
         ],
       };
 
     case PRESET_KEYS.HIGH_COMPARE_AT_DISCOUNT:
-      return {
-        operator: "AND",
-        conditions: [
-          { key: OPS.VARIANT_COMPARE_AT_PRICE, operator: "IS_NOT_EMPTY", value: null },
-          { key: OPS.VARIANT_PROFIT_MARGIN, operator: "GTE", value: discountThreshold },
-        ],
-      };
+      throw new FilterValidationError(
+        "HIGH_COMPARE_AT_DISCOUNT preset is temporarily disabled until compare-at discount is implemented as its own computed expression.",
+      );
 
     case PRESET_KEYS.MISSING_COST:
       return {
         operator: "AND",
-        conditions: [{ key: OPS.VARIANT_COST, operator: "IS_EMPTY", value: null }],
+        conditions: [
+          {
+            key: OPS.VARIANT_COST,
+            operator: "IS_EMPTY",
+            value: null,
+          },
+        ],
       };
 
     default:
-      throw new RangeError(`buildPresetFilterGroup: unknown presetKey "${presetKey}"`);
+      throw new RangeError(
+        `buildPresetFilterGroup: unknown presetKey "${presetKey}"`,
+      );
   }
 }
 
@@ -293,8 +322,10 @@ function normalizePagination(page, pageSize) {
 
 function normalizeSortParams(sortKey, sortDirection) {
   const safeKey = sortKey && ALLOWED_SORT_KEYS.has(sortKey) ? sortKey : null;
-  const dir = typeof sortDirection === "string" ? sortDirection.toUpperCase() : null;
+  const dir =
+    typeof sortDirection === "string" ? sortDirection.toUpperCase() : null;
   const safeDir = dir && ALLOWED_DIRECTIONS.has(dir) ? dir : null;
+
   return { sortKey: safeKey, sortDirection: safeDir };
 }
 
@@ -322,18 +353,26 @@ function validateFilterConfig(filterConfig) {
         if (!child) continue;
         walk(child, depth + 1);
       }
-    } else if (node.key) {
+      return;
+    }
+
+    if (node.key) {
       if (typeof node.key !== "string") {
-        throw new FilterValidationError("Filter condition key must be a string");
+        throw new FilterValidationError(
+          "Filter condition key must be a string",
+        );
       }
       if (typeof node.operator !== "string") {
-        throw new FilterValidationError("Filter condition operator must be a string");
+        throw new FilterValidationError(
+          "Filter condition operator must be a string",
+        );
       }
-    } else {
-      throw new FilterValidationError(
-        "Filter node must have either conditions[] or key/operator",
-      );
+      return;
     }
+
+    throw new FilterValidationError(
+      "Filter node must have either conditions[] or key/operator",
+    );
   }
 
   walk(filterConfig, 1);
@@ -361,17 +400,26 @@ export function buildProductListQuery(params) {
   validateFilterConfig(filterConfig);
 
   const { page, pageSize } = normalizePagination(rawPage, rawPageSize);
-  const { sortKey, sortDirection } = normalizeSortParams(rawSortKey, rawSortDirection);
+  const { sortKey, sortDirection } = normalizeSortParams(
+    rawSortKey,
+    rawSortDirection,
+  );
 
-  const { whereSql, joinsSql, values, nextParamIndex } = buildBaseFilterQueryParts({
-    shopId,
-    filterConfig,
-    baseMode: "PRODUCT",
+  const { whereSql, joinsSql, values, nextParamIndex } =
+    buildBaseFilterQueryParts({
+      shopId,
+      filterConfig,
+      baseMode: "PRODUCT",
+      sortKey,
+      includeRollupJoin: true,
+    });
+
+  const orderBySql = buildOrderByClause({
     sortKey,
-    includeRollupJoin: true,
+    sortDirection,
+    baseMode: "PRODUCT",
   });
 
-  const orderBySql = buildOrderByClause({ sortKey, sortDirection, baseMode: "PRODUCT" });
   const limit = pageSize;
   const offset = (page - 1) * limit;
 
@@ -387,7 +435,7 @@ export function buildProductListQuery(params) {
       p."categoryId"                     AS "categoryId",
       p."categoryName"                   AS "categoryName",
       p."description"                    AS "description",
-      p."templateSuffix"                 AS "templateSuffix",
+      p."templateSuffix"                 AS "themeTemplate",
       p."seoHidden"                      AS "seoHidden",
       p."visibleOnlineStore"             AS "visibleOnlineStore",
       p."visiblePos"                     AS "visiblePos",
@@ -424,10 +472,7 @@ export function buildProductListQuery(params) {
 }
 
 export function buildProductCountQuery(params) {
-  const {
-    shopId: rawShopId,
-    filterConfig,
-  } = params;
+  const { shopId: rawShopId, filterConfig } = params;
 
   const shopId = normalizeShopId(rawShopId);
   validateFilterConfig(filterConfig);
@@ -487,17 +532,26 @@ export function buildVariantListQuery(params) {
   validateFilterConfig(filterConfig);
 
   const { page, pageSize } = normalizePagination(rawPage, rawPageSize);
-  const { sortKey, sortDirection } = normalizeSortParams(rawSortKey, rawSortDirection);
+  const { sortKey, sortDirection } = normalizeSortParams(
+    rawSortKey,
+    rawSortDirection,
+  );
 
-  const { whereSql, joinsSql, values, nextParamIndex } = buildBaseFilterQueryParts({
-    shopId,
-    filterConfig,
-    baseMode: "VARIANT",
+  const { whereSql, joinsSql, values, nextParamIndex } =
+    buildBaseFilterQueryParts({
+      shopId,
+      filterConfig,
+      baseMode: "VARIANT",
+      sortKey,
+      includeRollupJoin: true,
+    });
+
+  const orderBySql = buildOrderByClause({
     sortKey,
-    includeRollupJoin: true,
+    sortDirection,
+    baseMode: "VARIANT",
   });
 
-  const orderBySql = buildOrderByClause({ sortKey, sortDirection, baseMode: "VARIANT" });
   const limit = pageSize;
   const offset = (page - 1) * limit;
 
@@ -514,14 +568,14 @@ export function buildVariantListQuery(params) {
       v."compareAtPrice"                 AS "compareAtPrice",
       v."cost"                           AS "cost",
       v."profitMarginPct"                AS "profitMarginPct",
-      v."taxable"                        AS "taxable",
+      v."taxable"                        AS "chargeTax",
       v."trackQuantity"                  AS "trackQuantity",
-      v."requiresShipping"               AS "requiresShipping",
-      v."inventoryQty"                   AS "inventoryQty",
-      v."inventoryPolicy"                AS "inventoryPolicy",
+      v."requiresShipping"               AS "physicalProduct",
+      v."inventoryQty"                   AS "inventoryQuantity",
+      v."inventoryPolicy"                AS "inventoryOutOfStockPolicy",
       v."countryOfOrigin"                AS "countryOfOrigin",
       v."hsTariffCode"                   AS "hsTariffCode",
-      v."weightGrams"                    AS "weightGrams",
+      v."weightGrams"                    AS "weight",
       v."weightUnit"                     AS "weightUnit",
       v."option1Value"                   AS "option1Value",
       v."option2Value"                   AS "option2Value",
@@ -532,10 +586,7 @@ export function buildVariantListQuery(params) {
       p."vendor"                         AS "productVendor",
       p."productType"                    AS "productType",
       p."categoryName"                   AS "categoryName",
-      p."templateSuffix"                 AS "templateSuffix",
-      p."visibleOnlineStore"             AS "visibleOnlineStore",
-      p."visiblePos"                     AS "visiblePos",
-      p."seoHidden"                      AS "seoHidden",
+      p."templateSuffix"                 AS "themeTemplate",
       p."createdAtShopify"               AS "createdAtShopify",
       p."updatedAtShopify"               AS "updatedAtShopify",
       p."publishedAtShopify"             AS "publishedAtShopify",
@@ -555,10 +606,7 @@ export function buildVariantListQuery(params) {
 }
 
 export function buildVariantCountQuery(params) {
-  const {
-    shopId: rawShopId,
-    filterConfig,
-  } = params;
+  const { shopId: rawShopId, filterConfig } = params;
 
   const shopId = normalizeShopId(rawShopId);
   validateFilterConfig(filterConfig);
@@ -604,7 +652,9 @@ export async function fetchVariantsPage(client, params) {
 /* Core builder                                                                */
 /* -------------------------------------------------------------------------- */
 
-const BASE_VARIANT_JOIN_HINT = REGISTRY_BY_KEY[OPS.VARIANT_BARCODE]?.pg?.joinHints?.[0];
+const BASE_VARIANT_JOIN_HINT =
+  REGISTRY_BY_KEY[OPS.VARIANT_BARCODE]?.pg?.joinHints?.[0];
+
 if (!BASE_VARIANT_JOIN_HINT) {
   throw new Error(
     "[productFilterService] Cannot derive BASE_VARIANT_JOIN_HINT from registry",
@@ -648,7 +698,11 @@ function buildBaseFilterQueryParts({
     Array.isArray(filterConfig.conditions) &&
     filterConfig.conditions.length > 0
   ) {
-    filterPredicateSql = compileGroup(filterConfig, { values, paramCounter, joinCollector }, 0);
+    filterPredicateSql = compileGroup(
+      filterConfig,
+      { values, paramCounter, joinCollector },
+      0,
+    );
   }
 
   const whereSql = filterPredicateSql
@@ -675,7 +729,11 @@ function compileGroup(group, ctx, depth) {
     return null;
   }
 
-  if (!group || !Array.isArray(group.conditions) || group.conditions.length === 0) {
+  if (
+    !group ||
+    !Array.isArray(group.conditions) ||
+    group.conditions.length === 0
+  ) {
     return null;
   }
 
@@ -683,7 +741,9 @@ function compileGroup(group, ctx, depth) {
   if (group.operator === "OR") {
     op = "OR";
   } else if (group.operator && group.operator !== "AND") {
-    logger.warn(`compileGroup: unknown group.operator "${group.operator}", defaulting to AND`);
+    logger.warn(
+      `compileGroup: unknown group.operator "${group.operator}", defaulting to AND`,
+    );
   }
 
   const parts = [];
@@ -752,12 +812,16 @@ function compileCondition(condition, ctx) {
   const { pg, valueType, operators } = def;
 
   if (!pg) {
-    logger.warn(`compileCondition: filter "${key}" missing PG mapping — skipping`);
+    logger.warn(
+      `compileCondition: filter "${key}" missing PG mapping — skipping`,
+    );
     return null;
   }
 
   if (Array.isArray(operators) && !operators.includes(operator)) {
-    logger.warn(`compileCondition: operator "${operator}" not allowed for "${key}" — skipping`);
+    logger.warn(
+      `compileCondition: operator "${operator}" not allowed for "${key}" — skipping`,
+    );
     return null;
   }
 
@@ -827,23 +891,27 @@ function buildSqlPredicate({ columnExpr, operator, value, valueType, ctx }) {
 
     case "IN": {
       if (!Array.isArray(value) || value.length === 0) return "FALSE";
+
       const capped = value.slice(0, MAX_IN_VALUES);
       const placeholders = capped.map((v) => {
         const p = nextParam();
         values.push(v);
         return p;
       });
+
       return `${columnExpr} IN (${placeholders.join(", ")})`;
     }
 
     case "NOT_IN": {
       if (!Array.isArray(value) || value.length === 0) return "TRUE";
+
       const capped = value.slice(0, MAX_IN_VALUES);
       const placeholders = capped.map((v) => {
         const p = nextParam();
         values.push(v);
         return p;
       });
+
       return `(${columnExpr} IS NULL OR ${columnExpr} NOT IN (${placeholders.join(", ")}))`;
     }
 
@@ -852,11 +920,14 @@ function buildSqlPredicate({ columnExpr, operator, value, valueType, ctx }) {
         logger.warn("buildSqlPredicate: BETWEEN requires [from, to]");
         return null;
       }
+
       const [from, to] = value;
       if (from == null || to == null) return null;
+
       const p1 = nextParam();
       const p2 = nextParam();
       values.push(from, to);
+
       return `${columnExpr} BETWEEN ${p1} AND ${p2}`;
     }
 
@@ -889,6 +960,7 @@ function buildSqlPredicate({ columnExpr, operator, value, valueType, ctx }) {
 
       const escaped = value.replace(/([%_\\])/g, "\\$1");
       let likeVal;
+
       switch (operator) {
         case "CONTAINS":
         case "NOT_CONTAINS":
@@ -904,6 +976,7 @@ function buildSqlPredicate({ columnExpr, operator, value, valueType, ctx }) {
 
       const p = nextParam();
       values.push(likeVal);
+
       const expr = `${columnExpr} ILIKE ${p} ESCAPE '\\\\'`;
       return operator === "NOT_CONTAINS" ? `NOT (${expr})` : expr;
     }
@@ -945,6 +1018,7 @@ class JoinCollector {
 
   addHint(hint) {
     if (!hint?.alias || !hint?.tableSql || !hint?.on) return;
+
     const key = `${hint.alias}|${hint.tableSql}`;
     if (!this._map.has(key)) {
       this._map.set(key, hint);
@@ -952,6 +1026,7 @@ class JoinCollector {
     }
 
     const existing = this._map.get(key);
+
     if (hint.type === "LEFT" && existing.type === "INNER") {
       this._map.set(key, hint);
     }
@@ -966,9 +1041,11 @@ class JoinCollector {
 
     const lines = [];
     for (const { type, tableSql, alias, on } of this._map.values()) {
-      const joinType = type?.toUpperCase() === "LEFT" ? "LEFT JOIN" : "INNER JOIN";
+      const joinType =
+        type?.toUpperCase() === "LEFT" ? "LEFT JOIN" : "INNER JOIN";
       lines.push(`${joinType} ${tableSql} ${alias} ON ${on}`);
     }
+
     return lines.join("\n");
   }
 }

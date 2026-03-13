@@ -1,5 +1,3 @@
-// FILE: web/index.js
-
 import "dotenv/config";
 import { join } from "path";
 import { readFileSync } from "fs";
@@ -127,11 +125,46 @@ function toLowerStatus(value) {
   return String(value ?? "").trim().toLowerCase();
 }
 
+function normalizeWeightUnitInput(value) {
+  const s = String(value ?? "").trim().toLowerCase();
+
+  if (!s) return null;
+
+  if (s === "g" || s === "gram" || s === "grams") return "g";
+  if (s === "kg" || s === "kilogram" || s === "kilograms") return "kg";
+  if (s === "oz" || s === "ounce" || s === "ounces") return "oz";
+  if (s === "lb" || s === "lbs" || s === "pound" || s === "pounds") return "lb";
+
+  return s;
+}
+
+function normalizeWeightUnitArray(value) {
+  if (Array.isArray(value)) {
+    return value.map(normalizeWeightUnitInput).filter(Boolean);
+  }
+
+  const single = normalizeWeightUnitInput(value);
+  return single ? [single] : [];
+}
+
+function normalizeShopifyWeightUnit(value) {
+  const s = String(value ?? "").trim().toLowerCase();
+
+  if (!s) return null;
+
+  if (s === "g" || s === "gram" || s === "grams") return "g";
+  if (s === "kg" || s === "kilogram" || s === "kilograms") return "kg";
+  if (s === "oz" || s === "ounce" || s === "ounces") return "oz";
+  if (s === "lb" || s === "lbs" || s === "pound" || s === "pounds") return "lb";
+
+  return s;
+}
+
 function weightToGrams(weight, unit) {
   const n = toNullableDecimalNumber(weight);
   if (n == null) return null;
 
-  const u = String(unit ?? "").trim().toLowerCase();
+  const u = normalizeShopifyWeightUnit(unit);
   if (u === "kg") return Math.round(n * 1000);
   if (u === "g") return Math.round(n);
   if (u === "lb") return Math.round(n * 453.59237);
@@ -147,6 +180,14 @@ function selectedOptionValue(selectedOptions, index) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function computeProfitMarginPct(price, cost) {
+  const p = toNullableDecimalNumber(price);
+  const c = toNullableDecimalNumber(cost);
+
+  if (p == null || c == null || p === 0) return null;
+  return Number((((p - c) / p) * 100).toFixed(4));
 }
 
 /* -------------------------------------------------------------------------- */
@@ -408,7 +449,14 @@ function buildDateFieldClause(column, opNorm, value) {
 }
 
 function buildVariantSomeStringClause(shopId, column, opNorm, value) {
-  const base = buildInsensitiveStringClause(column, opNorm, value);
+  const normalizedValue =
+    column === "weightUnit"
+      ? (Array.isArray(value)
+          ? normalizeWeightUnitArray(value)
+          : normalizeWeightUnitInput(value))
+      : value;
+
+  const base = buildInsensitiveStringClause(column, opNorm, normalizedValue);
   if (!base) return null;
 
   return {
@@ -435,9 +483,44 @@ function buildVariantSomeNumberClause(shopId, column, opNorm, value) {
   };
 }
 
-function buildVariantSomeBooleanClause(shopId, column, value) {
+function buildVariantSomeBooleanClause(shopId, column, value, opNorm = "eq") {
+  if (opNorm === "is_set") {
+    return {
+      variants: {
+        some: {
+          shopId,
+          [column]: { not: null },
+        },
+      },
+    };
+  }
+
+  if (opNorm === "is_not_set") {
+    return {
+      variants: {
+        some: {
+          shopId,
+          [column]: null,
+        },
+      },
+    };
+  }
+
   const b = parseBooleanInput(value);
   if (b == null) return null;
+
+  if (opNorm === "neq") {
+    return {
+      variants: {
+        some: {
+          shopId,
+          NOT: {
+            [column]: b,
+          },
+        },
+      },
+    };
+  }
 
   return {
     variants: {
@@ -582,6 +665,23 @@ function buildInventoryLocationClause(shopId, opNorm, value) {
     };
   }
 
+  if (opNorm === "in") {
+    const vals = normalizeStringArray(value);
+    if (!vals.length) return null;
+
+    return {
+      inventoryByLoc: {
+        some: {
+          shopId,
+          OR: vals.flatMap((x) => [
+            { locationId: x },
+            { locationName: { equals: x, mode: "insensitive" } },
+          ]),
+        },
+      },
+    };
+  }
+
   return null;
 }
 
@@ -659,11 +759,8 @@ function buildWhereAndWarnings(shopId, filterExpr) {
       const v = normalizeString(value);
       if (opNorm === "eq" && v) clause = { id: v };
       else if (opNorm === "contains" && v) clause = { id: { contains: v } };
-      else if (opNorm === "starts_with" && v) {
-        clause = { id: { startsWith: v } };
-      } else if (opNorm === "ends_with" && v) {
-        clause = { id: { endsWith: v } };
-      }
+      else if (opNorm === "starts_with" && v) clause = { id: { startsWith: v } };
+      else if (opNorm === "ends_with" && v) clause = { id: { endsWith: v } };
     } else if (
       id === "product.tag" ||
       id === "product.tags" ||
@@ -710,46 +807,47 @@ function buildWhereAndWarnings(shopId, filterExpr) {
     } else if (id === "variant.title") {
       clause = buildVariantSomeStringClause(shopId, "title", opNorm, value);
     } else if (id === "variant.compareatprice") {
-      clause = buildVariantSomeNumberClause(
-        shopId,
-        "compareAtPrice",
-        opNorm,
-        value,
-      );
-    } else if (id === "variant.cost") {
+      clause = buildVariantSomeNumberClause(shopId, "compareAtPrice", opNorm, value);
+    } else if (
+      id === "variant.cost" ||
+      id === "cost"
+    ) {
       clause = buildVariantSomeNumberClause(shopId, "cost", opNorm, value);
     } else if (id === "variant.price") {
       clause = buildVariantSomeNumberClause(shopId, "price", opNorm, value);
-    } else if (id === "variant.profitmargin") {
-      clause = buildVariantSomeNumberClause(
-        shopId,
-        "profitMarginPct",
-        opNorm,
-        value,
-      );
-    } else if (id === "variant.trackquantity") {
-      clause = buildVariantSomeBooleanClause(shopId, "trackQuantity", value);
+    } else if (
+      id === "variant.profitmargin" ||
+      id === "variant.profitmarginpct" ||
+      id === "profitmargin" ||
+      id === "profit_margin" ||
+      id === "profit_margin_pct"
+    ) {
+      clause = buildVariantSomeNumberClause(shopId, "profitMarginPct", opNorm, value);
+    } else if (
+      id === "variant.trackquantity" ||
+      id === "variant.track_quantity" ||
+      id === "trackquantity" ||
+      id === "track_quantity"
+    ) {
+      clause = buildVariantSomeBooleanClause(shopId, "trackQuantity", value, opNorm);
     } else if (id === "variant.chargetax") {
-      clause = buildVariantSomeBooleanClause(shopId, "taxable", value);
-    } else if (id === "variant.physicalproduct") {
-      clause = buildVariantSomeBooleanClause(shopId, "requiresShipping", value);
+      clause = buildVariantSomeBooleanClause(shopId, "taxable", value, opNorm);
+    } else if (
+      id === "variant.physicalproduct" ||
+      id === "variant.physical_product" ||
+      id === "physicalproduct" ||
+      id === "physical_product" ||
+      id === "variant.requiresshipping" ||
+      id === "requiresshipping"
+    ) {
+      clause = buildVariantSomeBooleanClause(shopId, "requiresShipping", value, opNorm);
     } else if (
       id === "variant.inventoryquantity" ||
       id === "variant.inventory_quantity"
     ) {
-      clause = buildVariantSomeNumberClause(
-        shopId,
-        "inventoryQty",
-        opNorm,
-        value,
-      );
+      clause = buildVariantSomeNumberClause(shopId, "inventoryQty", opNorm, value);
     } else if (id === "variant.inventorypolicy") {
-      clause = buildVariantSomeStringClause(
-        shopId,
-        "inventoryPolicy",
-        opNorm,
-        value,
-      );
+      clause = buildVariantSomeStringClause(shopId, "inventoryPolicy", opNorm, value);
     } else if (id === "variant.option1value") {
       clause = buildVariantSomeStringClause(shopId, "option1Value", opNorm, value);
     } else if (id === "variant.option2value") {
@@ -757,7 +855,17 @@ function buildWhereAndWarnings(shopId, filterExpr) {
     } else if (id === "variant.option3value") {
       clause = buildVariantSomeStringClause(shopId, "option3Value", opNorm, value);
     } else if (id === "variant.weightunit") {
-      clause = buildVariantSomeStringClause(shopId, "weightUnit", opNorm, value);
+      const normalizedValue =
+        opNorm === "in" || opNorm === "not_in"
+          ? normalizeWeightUnitArray(value)
+          : normalizeWeightUnitInput(value);
+
+      clause = buildVariantSomeStringClause(
+        shopId,
+        "weightUnit",
+        opNorm,
+        normalizedValue,
+      );
     } else if (id === "variant.weight") {
       clause = buildVariantSomeNumberClause(shopId, "weightGrams", opNorm, value);
     } else if (
@@ -765,6 +873,20 @@ function buildWhereAndWarnings(shopId, filterExpr) {
       id === "variant.inventorylocation"
     ) {
       clause = buildInventoryLocationClause(shopId, opNorm, value);
+    } else if (
+      id === "variant.countryoforigin" ||
+      id === "variant.country_of_origin" ||
+      id === "countryoforigin" ||
+      id === "country_of_origin"
+    ) {
+      clause = buildVariantSomeStringClause(shopId, "countryOfOrigin", opNorm, value);
+    } else if (
+      id === "variant.hstariffcode" ||
+      id === "variant.hs_tariff_code" ||
+      id === "hstariffcode" ||
+      id === "hs_tariff_code"
+    ) {
+      clause = buildVariantSomeStringClause(shopId, "hsTariffCode", opNorm, value);
     } else if (id === "product.category") {
       clause = buildInsensitiveStringClause("categoryName", opNorm, value);
     } else if (id === "product.description") {
@@ -775,18 +897,69 @@ function buildWhereAndWarnings(shopId, filterExpr) {
       clause = buildInsensitiveStringClause("option2Name", opNorm, value);
     } else if (id === "product.option3name") {
       clause = buildInsensitiveStringClause("option3Name", opNorm, value);
-    } else if (id === "product.template") {
+    } else if (
+      id === "product.template" ||
+      id === "product.themetemplate" ||
+      id === "product.theme_template" ||
+      id === "product.templatesuffix" ||
+      id === "product.template_suffix"
+    ) {
       clause = buildInsensitiveStringClause("templateSuffix", opNorm, value);
     } else if (
       id === "product.searchenginevisibility" ||
-      id === "product.visibleonlinestore" ||
-      id === "product.visiblepos" ||
-      id === "variant.countryoforigin" ||
-      id === "variant.hstariffcode"
+      id === "product.seohidden" ||
+      id === "product.seo_hidden"
     ) {
-      warnings.push(
-        `Filter "${filterId}" is not yet supported by the current sync payload.`,
-      );
+      const boolValue = parseBooleanInput(value);
+
+      if (opNorm === "is_set") {
+        clause = { seoHidden: { not: null } };
+      } else if (opNorm === "is_not_set") {
+        clause = { seoHidden: null };
+      } else if (boolValue != null) {
+        clause =
+          opNorm === "neq"
+            ? { NOT: { seoHidden: boolValue } }
+            : { seoHidden: boolValue };
+      } else {
+        warnings.push(`Filter "${filterId}" requires boolean value true/false.`);
+      }
+    } else if (
+      id === "product.visibleonlinestore" ||
+      id === "product.visible_online_store"
+    ) {
+      const boolValue = parseBooleanInput(value);
+
+      if (opNorm === "is_set") {
+        clause = { visibleOnlineStore: { not: null } };
+      } else if (opNorm === "is_not_set") {
+        clause = { visibleOnlineStore: null };
+      } else if (boolValue != null) {
+        clause =
+          opNorm === "neq"
+            ? { NOT: { visibleOnlineStore: boolValue } }
+            : { visibleOnlineStore: boolValue };
+      } else {
+        warnings.push(`Filter "${filterId}" requires boolean value true/false.`);
+      }
+    } else if (
+      id === "product.visiblepos" ||
+      id === "product.visible_pos"
+    ) {
+      const boolValue = parseBooleanInput(value);
+
+      if (opNorm === "is_set") {
+        clause = { visiblePos: { not: null } };
+      } else if (opNorm === "is_not_set") {
+        clause = { visiblePos: null };
+      } else if (boolValue != null) {
+        clause =
+          opNorm === "neq"
+            ? { NOT: { visiblePos: boolValue } }
+            : { visiblePos: boolValue };
+      } else {
+        warnings.push(`Filter "${filterId}" requires boolean value true/false.`);
+      }
     } else {
       warnings.push(`Unsupported filter "${filterId}" was ignored.`);
     }
@@ -995,9 +1168,45 @@ async function getFilterSuggestions(shopId, key, q, limit = 10) {
   }
 
   if (k === "variant.weightUnit") {
-    return ["g", "kg", "oz", "lb"].filter((s) =>
-      s.includes(term.toLowerCase()),
-    );
+    const options = [
+      { label: "Grams", value: "g" },
+      { label: "Kilograms", value: "kg" },
+      { label: "Ounces", value: "oz" },
+      { label: "Pounds", value: "lb" },
+    ];
+
+    const qNorm = term.toLowerCase();
+
+    return options
+      .filter((opt) =>
+        opt.label.toLowerCase().includes(qNorm) || opt.value.includes(qNorm),
+      )
+      .map((opt) => opt.value);
+  }
+
+  if (
+    k === "variant.connectedInventoryLocation" ||
+    k === "variant.inventoryLocation"
+  ) {
+    const rows = await prisma.productInventoryLocation.findMany({
+      where: {
+        shopId,
+        OR: [
+          { locationId: { contains: term } },
+          { locationName: { contains: term, mode: "insensitive" } },
+        ],
+      },
+      select: {
+        locationId: true,
+        locationName: true,
+      },
+      orderBy: { locationName: "asc" },
+      take: safeLimit * 3,
+    });
+
+    return uniqueStrings(
+      rows.flatMap((r) => [r.locationName, r.locationId]),
+    ).slice(0, safeLimit);
   }
 
   if (k === "variant.option1Value") {
@@ -1058,18 +1267,25 @@ function buildVariantRecordsFromProduct(shopId, productNode) {
     .map((variant) => {
       const price = toNullableDecimalNumber(variant.price);
       const compareAtPrice = toNullableDecimalNumber(variant.compareAtPrice);
-      const cost = null;
 
-      let profitMarginPct = null;
-      if (price != null && cost != null && price !== 0) {
-        profitMarginPct = ((price - cost) / price) * 100;
+      let cost = null;
+      if (variant.inventoryItem?.unitCost?.amount != null) {
+        cost = toNullableDecimalNumber(variant.inventoryItem.unitCost.amount);
+      } else if (variant.inventoryItem?.cost != null) {
+        cost = toNullableDecimalNumber(variant.inventoryItem.cost);
       }
 
       const weightValue =
-        variant.inventoryItem?.measurement?.weight?.value ?? null;
+        variant.inventoryItem?.measurement?.weight?.value ??
+        variant.weight ??
+        null;
 
-      const weightUnit =
-        variant.inventoryItem?.measurement?.weight?.unit ?? null;
+      const rawWeightUnit =
+        variant.inventoryItem?.measurement?.weight?.unit ??
+        variant.weightUnit ??
+        null;
+
+      const normalizedWeightUnit = normalizeShopifyWeightUnit(rawWeightUnit);
 
       return {
         shopId,
@@ -1081,20 +1297,27 @@ function buildVariantRecordsFromProduct(shopId, productNode) {
         price,
         compareAtPrice,
         cost,
-        profitMarginPct,
+        profitMarginPct: computeProfitMarginPct(price, cost),
         taxable: typeof variant.taxable === "boolean" ? variant.taxable : null,
         trackQuantity:
-          typeof variant.inventoryQuantity === "number" ? true : null,
-        requiresShipping: null,
+          typeof variant.inventoryItem?.tracked === "boolean"
+            ? variant.inventoryItem.tracked
+            : typeof variant.inventoryQuantity === "number"
+              ? true
+              : null,
+        requiresShipping:
+          typeof variant.requiresShipping === "boolean"
+            ? variant.requiresShipping
+            : null,
         inventoryQty:
           typeof variant.inventoryQuantity === "number"
             ? variant.inventoryQuantity
             : 0,
         inventoryPolicy: variant.inventoryPolicy ?? null,
-        countryOfOrigin: null,
-        hsTariffCode: null,
-        weightGrams: weightToGrams(weightValue, weightUnit),
-        weightUnit: weightUnit ?? null,
+        countryOfOrigin: variant.inventoryItem?.countryCodeOfOrigin ?? null,
+        hsTariffCode: variant.inventoryItem?.harmonizedSystemCode ?? null,
+        weightGrams: weightToGrams(weightValue, normalizedWeightUnit),
+        weightUnit: normalizedWeightUnit,
         option1Value: selectedOptionValue(variant.selectedOptions, 0),
         option2Value: selectedOptionValue(variant.selectedOptions, 1),
         option3Value: selectedOptionValue(variant.selectedOptions, 2),
@@ -1137,12 +1360,61 @@ function buildVariantRollupData(variants) {
   };
 }
 
+function buildProductInventoryLocationRows(shopId, productNode) {
+  const rows = [];
+  const seen = new Map();
+
+  const variantEdges = productNode?.variants?.edges || [];
+
+  for (const edge of variantEdges) {
+    const variant = edge?.node;
+    if (!variant) continue;
+
+    const inventoryLevels = variant.inventoryItem?.inventoryLevels?.edges || [];
+
+    for (const inventoryEdge of inventoryLevels) {
+      const level = inventoryEdge?.node;
+      const locationId = normalizeString(level?.location?.id);
+      if (!locationId) continue;
+
+      const locationName = normalizeString(level?.location?.name) || null;
+      const availableRaw = parseNumberInput(level?.quantities?.[0]?.quantity);
+      const available = availableRaw == null ? 0 : availableRaw;
+
+      const key = `${shopId}|${productNode.id}|${locationId}`;
+
+      if (!seen.has(key)) {
+        const row = {
+          shopId,
+          productId: productNode.id,
+          locationId,
+          locationName,
+          hasInventory: available > 0,
+          totalQuantity: available,
+        };
+        seen.set(key, row);
+        rows.push(row);
+      } else {
+        const existing = seen.get(key);
+        existing.totalQuantity = (existing.totalQuantity ?? 0) + available;
+        existing.hasInventory = existing.hasInventory || available > 0;
+        if (!existing.locationName && locationName) {
+          existing.locationName = locationName;
+        }
+      }
+    }
+  }
+
+  return rows;
+}
+
 async function syncSingleProductGraphNode(shopId, productNode) {
   const productId = productNode.id;
   const optionNames = Array.isArray(productNode.options) ? productNode.options : [];
   const tagRows = buildProductTagRows(shopId, productId, productNode.tags);
   const variantRecords = buildVariantRecordsFromProduct(shopId, productNode);
   const rollup = buildVariantRollupData(variantRecords);
+  const inventoryLocationRows = buildProductInventoryLocationRows(shopId, productNode);
 
   await prisma.productLite.upsert({
     where: {
@@ -1242,6 +1514,17 @@ async function syncSingleProductGraphNode(shopId, productNode) {
       ...rollup,
     },
   });
+
+  await prisma.productInventoryLocation.deleteMany({
+    where: { shopId, productId },
+  });
+
+  if (inventoryLocationRows.length > 0) {
+    await prisma.productInventoryLocation.createMany({
+      data: inventoryLocationRows,
+      skipDuplicates: true,
+    });
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1289,12 +1572,35 @@ query SyncProducts($first: Int!, $after: String) {
               inventoryQuantity
               inventoryPolicy
               taxable
+              requiresShipping
+              weight
+              weightUnit
 
               inventoryItem {
+                tracked
+                unitCost {
+                  amount
+                }
+                countryCodeOfOrigin
+                harmonizedSystemCode
                 measurement {
                   weight {
                     value
                     unit
+                  }
+                }
+                inventoryLevels(first: 50) {
+                  edges {
+                    node {
+                      location {
+                        id
+                        name
+                      }
+                      quantities(names: ["available"]) {
+                        name
+                        quantity
+                      }
+                    }
                   }
                 }
               }
@@ -1341,6 +1647,30 @@ app.use("/api/*", shopify.validateAuthenticatedSession());
 /* GraphQL-lite endpoint                                                       */
 /* -------------------------------------------------------------------------- */
 
+const SYNC_PRODUCTS_PAGE_MAX = 50;
+const SYNC_PRODUCT_CONCURRENCY = 5;
+
+async function mapWithConcurrency(items, limit, worker) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+
+  async function run() {
+    while (true) {
+      const current = nextIndex++;
+      if (current >= items.length) return;
+      results[current] = await worker(items[current], current);
+    }
+  }
+
+  const runners = Array.from(
+    { length: Math.min(limit, items.length || 0) },
+    () => run(),
+  );
+
+  await Promise.all(runners);
+  return results;
+}
+
 app.post("/api/graphql", async (req, res) => {
   try {
     const session = res.locals?.shopify?.session;
@@ -1376,66 +1706,73 @@ app.post("/api/graphql", async (req, res) => {
       });
     }
 
-    if (query.includes("syncProductsToDb")) {
-      const first = Math.min(Math.max(Number(variables?.first ?? 10), 1), 10);
-      const after = variables?.after ?? null;
+   if (query.includes("syncProductsToDb")) {
+  const first = Math.min(
+    Math.max(Number(variables?.first ?? SYNC_PRODUCTS_PAGE_MAX), 1),
+    SYNC_PRODUCTS_PAGE_MAX,
+  );
+  const after = variables?.after ?? null;
 
-      const response = await client.request(SYNC_PRODUCTS_QUERY, {
-        variables: { first, after },
-      });
+  const response = await client.request(SYNC_PRODUCTS_QUERY, {
+    variables: { first, after },
+  });
 
-      const edges = response?.data?.products?.edges || [];
+  const edges = response?.data?.products?.edges || [];
 
-      for (const edge of edges) {
-        const productNode = edge?.node;
-        if (!productNode?.id) continue;
+  await mapWithConcurrency(
+    edges,
+    SYNC_PRODUCT_CONCURRENCY,
+    async (edge) => {
+      const productNode = edge?.node;
+      if (!productNode?.id) return;
 
-        let lastError = null;
-        let synced = false;
+      let lastError = null;
+      let synced = false;
 
-        for (let attempt = 1; attempt <= 3; attempt += 1) {
-          try {
-            await syncSingleProductGraphNode(shopId, productNode);
-            synced = true;
-            break;
-          } catch (err) {
-            lastError = err;
-            const msg = String(err?.message || err);
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        try {
+          await syncSingleProductGraphNode(shopId, productNode);
+          synced = true;
+          break;
+        } catch (err) {
+          lastError = err;
+          const msg = String(err?.message || err);
 
-            const retryable =
-              msg.includes("Unable to start a transaction in the given time") ||
-              msg.includes("timeout") ||
-              msg.includes("Timed out") ||
-              msg.includes("Too many connections");
+          const retryable =
+            msg.includes("Unable to start a transaction in the given time") ||
+            msg.includes("timeout") ||
+            msg.includes("Timed out") ||
+            msg.includes("Too many connections");
 
-            if (!retryable || attempt === 3) {
-              throw err;
-            }
-
-            await sleep(150 * attempt);
+          if (!retryable || attempt === 3) {
+            throw err;
           }
-        }
 
-        if (!synced && lastError) {
-          throw lastError;
+          await sleep(100 * attempt);
         }
       }
 
-      const pageInfo = response?.data?.products?.pageInfo;
-      const hasNextPage = Boolean(pageInfo?.hasNextPage);
-      const nextCursor =
-        hasNextPage && edges.length > 0 ? edges[edges.length - 1].cursor : null;
+      if (!synced && lastError) {
+        throw lastError;
+      }
+    },
+  );
 
-      return res.json({
-        data: {
-          syncProductsToDb: {
-            synced: edges.length,
-            nextCursor,
-            hasNextPage,
-          },
-        },
-      });
-    }
+  const pageInfo = response?.data?.products?.pageInfo;
+  const hasNextPage = Boolean(pageInfo?.hasNextPage);
+  const nextCursor =
+    hasNextPage && edges.length > 0 ? edges[edges.length - 1].cursor : null;
+
+  return res.json({
+    data: {
+      syncProductsToDb: {
+        synced: edges.length,
+        nextCursor,
+        hasNextPage,
+      },
+    },
+  });
+}
 
     if (query.includes("productsByFilter")) {
       const input = variables?.input ?? {};

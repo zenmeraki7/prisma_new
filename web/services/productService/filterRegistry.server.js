@@ -1,19 +1,18 @@
-// FILE: web/services/productService/filterRegistry.server.js
-
 /**
- * FAST-plane filter registry aligned to the Prisma schema:
- *   - "ProductLite"
- *   - "VariantLite"
- *   - "VariantRollup"
- *   - "ProductCollection"
- *   - "ProductTag"
- *   - "ProductInventoryLocation"
+ * FILE: web/services/productService/filterRegistry.server.js
  *
- * Base FROM is always:
- *   FROM "ProductLite" p
+ * PG-mirror aligned filter registry.
  *
- * Every query must scope by:
- *   p."shopId" = $1
+ * Canonical query plane assumptions:
+ *   - "ProductLite" p
+ *   - "VariantLite" v
+ *   - "VariantRollup" vr
+ *   - "ProductCollection" pc
+ *   - "ProductTag" pt
+ *
+ * IMPORTANT:
+ *  - Only expose filters that are actually backed by the current PG mirror pipeline.
+ *  - Unsupported filters remain in OPS for UI compatibility, but are explicitly marked unsupported.
  */
 
 /**
@@ -194,23 +193,6 @@ const JOIN_TAGS = Object.freeze(
   ]),
 );
 
-/**
- * Schema note:
- * You do not currently have a true variant-location table in Prisma.
- * "ProductInventoryLocation" is product-level, not variant-level.
- * We use it as the closest available approximation for location filters.
- */
-const JOIN_PRODUCT_LOCATION = Object.freeze(
-  /** @type {JoinHint[]} */ ([
-    {
-      type: "LEFT",
-      tableSql: `"ProductInventoryLocation"`,
-      alias: "pil",
-      on: `pil."shopId" = p."shopId" AND pil."productId" = p."id"`,
-    },
-  ]),
-);
-
 /* -------------------------------------------------------------------------- */
 /* PG helpers                                                                  */
 /* -------------------------------------------------------------------------- */
@@ -236,15 +218,25 @@ const NUMERIC_TEXT_CAST = (expr) =>
 
 const AVAILABILITY_EXPR = `
 CASE
-  WHEN COALESCE(v."inventoryQty", 0) > 0 THEN 'in_stock'
-  WHEN COALESCE(v."inventoryQty", 0) <= 0
-       AND LOWER(COALESCE(v."inventoryPolicy", '')) = 'continue'
+  WHEN COALESCE(v."inventoryQuantity", 0) > 0 THEN 'in_stock'
+  WHEN COALESCE(v."inventoryQuantity", 0) <= 0
+       AND LOWER(COALESCE(v."inventoryOutOfStockPolicy", '')) = 'continue'
     THEN 'on_backorder'
   ELSE 'out_of_stock'
 END
 `;
 
+const PROFIT_MARGIN_EXPR = `
+CASE
+  WHEN v."price" IS NULL OR v."price" = 0 OR v."cost" IS NULL THEN NULL
+  ELSE ROUND(((v."price" - v."cost") / v."price") * 100, 4)
+END
+`;
+
 const HAS_IMAGES_COUNT_EXPR = `CASE WHEN p."hasImages" THEN 1 ELSE 0 END`;
+
+const UNSUPPORTED_REASON_NOT_BACKED =
+  "Not backed by the current PG mirror sync pipeline yet.";
 
 /* -------------------------------------------------------------------------- */
 /* Registry                                                                    */
@@ -414,7 +406,8 @@ export const REGISTRY_BY_KEY = Object.freeze({
     label: "SEO Hidden",
     valueType: "BOOLEAN",
     operators: BOOLEAN_OPERATORS,
-    sortable: true,
+    sortable: false,
+    unsupportedReason: UNSUPPORTED_REASON_NOT_BACKED,
     pg: pgProduct("seoHidden"),
   },
 
@@ -450,7 +443,7 @@ export const REGISTRY_BY_KEY = Object.freeze({
     valueType: "STRING",
     operators: STRING_OPERATORS,
     sortable: true,
-    pg: pgProduct("templateSuffix"),
+    pg: pgProduct("themeTemplate"),
   },
 
   [OPS.PRODUCT_TITLE]: {
@@ -489,7 +482,8 @@ export const REGISTRY_BY_KEY = Object.freeze({
     label: "Visible Online Store",
     valueType: "BOOLEAN",
     operators: BOOLEAN_OPERATORS,
-    sortable: true,
+    sortable: false,
+    unsupportedReason: UNSUPPORTED_REASON_NOT_BACKED,
     pg: pgProduct("visibleOnlineStore"),
   },
 
@@ -499,7 +493,8 @@ export const REGISTRY_BY_KEY = Object.freeze({
     label: "Visible POS",
     valueType: "BOOLEAN",
     operators: BOOLEAN_OPERATORS,
-    sortable: true,
+    sortable: false,
+    unsupportedReason: UNSUPPORTED_REASON_NOT_BACKED,
     pg: pgProduct("visiblePos"),
   },
 
@@ -532,7 +527,7 @@ export const REGISTRY_BY_KEY = Object.freeze({
     valueType: "BOOLEAN",
     operators: BOOLEAN_OPERATORS,
     sortable: true,
-    pg: pgVariant("taxable"),
+    pg: pgVariant("chargeTax"),
   },
 
   [OPS.VARIANT_COMPARE_AT_PRICE]: {
@@ -551,12 +546,10 @@ export const REGISTRY_BY_KEY = Object.freeze({
     label: "Connected Inventory Location Name",
     valueType: "STRING",
     operators: STRING_OPERATORS,
-    sortable: true,
-    pg: {
-      tableAlias: "pil",
-      column: "locationName",
-      joinHints: JOIN_PRODUCT_LOCATION,
-    },
+    sortable: false,
+    unsupportedReason:
+      "Connected inventory location needs a dedicated PG-backed location materialization for VariantLite.",
+    pg: pgExpr(`NULL::text`, [JOIN_VARIANT]),
   },
 
   [OPS.VARIANT_CONNECTED_INVENTORY_LOCATION_ID]: {
@@ -566,7 +559,9 @@ export const REGISTRY_BY_KEY = Object.freeze({
     valueType: "NUMBER",
     operators: NUMBER_OPERATORS,
     sortable: false,
-    pg: pgExpr(NUMERIC_TEXT_CAST(`pil."locationId"`), JOIN_PRODUCT_LOCATION),
+    unsupportedReason:
+      "Connected inventory location needs a dedicated PG-backed location materialization for VariantLite.",
+    pg: pgExpr(`NULL::numeric`, [JOIN_VARIANT]),
   },
 
   [OPS.VARIANT_COST]: {
@@ -598,7 +593,7 @@ export const REGISTRY_BY_KEY = Object.freeze({
     operators: ENUM_OPERATORS,
     sortable: false,
     unsupportedReason:
-      'Schema does not currently store fulfillment service on "VariantLite". Add the field to Prisma schema + sync pipeline before enabling this filter.',
+      'Schema does not currently store fulfillment service on "VariantLite".',
     pg: pgExpr(`NULL::text`, [JOIN_VARIANT]),
   },
 
@@ -608,8 +603,10 @@ export const REGISTRY_BY_KEY = Object.freeze({
     label: "Weight (grams)",
     valueType: "NUMBER",
     operators: NUMBER_OPERATORS,
-    sortable: true,
-    pg: pgVariant("weightGrams"),
+    sortable: false,
+    unsupportedReason:
+      "Weight grams is not materialized; use weight + weight unit or add a computed grams column.",
+    pg: pgExpr(`NULL::numeric`, [JOIN_VARIANT]),
   },
 
   [OPS.VARIANT_HS_TARIFF_CODE]: {
@@ -630,7 +627,7 @@ export const REGISTRY_BY_KEY = Object.freeze({
     enumValues: Object.freeze(["deny", "continue"]),
     operators: ENUM_OPERATORS,
     sortable: true,
-    pg: pgExpr(`LOWER(COALESCE(v."inventoryPolicy", ''))`, [JOIN_VARIANT]),
+    pg: pgExpr(`LOWER(COALESCE(v."inventoryOutOfStockPolicy", ''))`, [JOIN_VARIANT]),
   },
 
   [OPS.VARIANT_OPTION1_VALUE]: {
@@ -670,7 +667,7 @@ export const REGISTRY_BY_KEY = Object.freeze({
     valueType: "BOOLEAN",
     operators: BOOLEAN_OPERATORS,
     sortable: true,
-    pg: pgVariant("requiresShipping"),
+    pg: pgVariant("physicalProduct"),
   },
 
   [OPS.VARIANT_PRICE]: {
@@ -691,7 +688,7 @@ export const REGISTRY_BY_KEY = Object.freeze({
     operators: NUMBER_OPERATORS,
     sortable: true,
     isComputed: true,
-    pg: pgVariant("profitMarginPct"),
+    pg: pgExpr(PROFIT_MARGIN_EXPR, [JOIN_VARIANT]),
   },
 
   [OPS.VARIANT_SKU]: {
@@ -721,7 +718,7 @@ export const REGISTRY_BY_KEY = Object.freeze({
     valueType: "NUMBER",
     operators: NUMBER_OPERATORS,
     sortable: true,
-    pg: pgVariant("inventoryQty"),
+    pg: pgVariant("inventoryQuantity"),
   },
 
   [OPS.VARIANT_TITLE]: {
@@ -741,7 +738,7 @@ export const REGISTRY_BY_KEY = Object.freeze({
     valueType: "NUMBER",
     operators: NUMBER_OPERATORS,
     sortable: true,
-    pg: pgVariant("weightGrams"),
+    pg: pgVariant("weight"),
   },
 
   [OPS.VARIANT_WEIGHT_UNIT]: {

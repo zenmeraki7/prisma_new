@@ -32,12 +32,21 @@ const PRODUCTS_BULK_QUERY = `
         status
         productType
         vendor
+        description
+        descriptionHtml
         templateSuffix
         tags
         publishedAt
         createdAt
         updatedAt
         onlineStoreUrl
+        category {
+          id
+          name
+        }
+        options {
+          name
+        }
         seo {
           title
           description
@@ -64,6 +73,10 @@ const VARIANTS_BULK_QUERY = `
         requiresShipping
         createdAt
         updatedAt
+        selectedOptions {
+          name
+          value
+        }
         product {
           id
         }
@@ -76,6 +89,8 @@ const VARIANTS_BULK_QUERY = `
           unitCost {
             amount
           }
+          countryCodeOfOrigin
+          harmonizedSystemCode
         }
       }
     }

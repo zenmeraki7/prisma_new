@@ -1,5 +1,3 @@
-// FILE: web/frontend/queries/syncProductsToDb.ts
-
 import type { AppBridgeState } from "@shopify/app-bridge-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
@@ -19,10 +17,6 @@ const SYNC_PRODUCTS_MUTATION = /* GraphQL */ `
   }
 `;
 
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 export async function syncProductsToDbRequest(
   _app: AppBridgeState,
   params: {
@@ -30,7 +24,7 @@ export async function syncProductsToDbRequest(
     after?: string | null;
   } = {},
 ): Promise<SyncProductsResult> {
-  const first = params.first ?? 10;
+  const first = params.first ?? 50;
   const after = params.after ?? null;
 
   const response = await fetch("/api/graphql", {
@@ -86,17 +80,13 @@ export async function syncAllProductsToDb(
 
   while (hasNextPage) {
     const res = await syncProductsToDbRequest(app, {
-      first: 10,
+      first: 50,
       after,
     });
 
     totalSynced += res.synced;
     hasNextPage = Boolean(res.hasNextPage);
     after = res.nextCursor ?? null;
-
-    if (hasNextPage) {
-      await sleep(150);
-    }
   }
 
   return { totalSynced };

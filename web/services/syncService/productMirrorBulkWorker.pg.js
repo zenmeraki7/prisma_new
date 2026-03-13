@@ -1,37 +1,23 @@
-// FILE: web/services/syncService/productMirrorBulkWorker.pg.js
-
 import readline from "readline";
 import { pool } from "../../db/postgres/pool.js";
 import logger from "../../utils/logger.server.js";
 
-/* -------------------------------------------------------------------------- */
-/*  Safety constants                                                          */
-/* -------------------------------------------------------------------------- */
-
-const HYDRATION_BATCH_SIZE = 250;        // products per batch
-const PROGRESS_PERSIST_INTERVAL = 500;   // persist every N products
-const MAX_STREAM_RECORDS = 200_000;      // hard safety cap
-
-/* -------------------------------------------------------------------------- */
-/*  Advisory locks (per-shop product sync)                                    */
-/* -------------------------------------------------------------------------- */
-
-const PRODUCT_LOCK_KEY = 1; // logical namespace for "product sync" locks
+const HYDRATION_BATCH_SIZE = 250;
+const PROGRESS_PERSIST_INTERVAL = 500;
+const MAX_STREAM_RECORDS = 200_000;
+const PRODUCT_LOCK_KEY = 1;
 
 async function acquireProductSyncLock(client, shopId) {
-  const sql = "SELECT pg_try_advisory_lock($1, $2) AS locked";
-  const { rows } = await client.query(sql, [shopId, PRODUCT_LOCK_KEY]);
-  if (!rows[0]?.locked) {
-    throw new Error("productSync.lockNotAcquired");
-  }
+  const { rows } = await client.query(
+    "SELECT pg_try_advisory_lock($1, $2) AS locked",
+    [shopId, PRODUCT_LOCK_KEY],
+  );
+  if (!rows[0]?.locked) throw new Error("productSync.lockNotAcquired");
 }
 
 async function releaseProductSyncLock(client, shopId) {
   try {
-    await client.query("SELECT pg_advisory_unlock($1, $2)", [
-      shopId,
-      PRODUCT_LOCK_KEY,
-    ]);
+    await client.query("SELECT pg_advisory_unlock($1, $2)", [shopId, PRODUCT_LOCK_KEY]);
   } catch (err) {
     logger.warn("[productMirrorBulkWorker.pg] Failed to release advisory lock", {
       shopId,
@@ -40,21 +26,16 @@ async function releaseProductSyncLock(client, shopId) {
   }
 }
 
-/* -------------------------------------------------------------------------- */
-/*  Sync history helpers                                                      */
-/* -------------------------------------------------------------------------- */
-
 async function markSyncHistoryStart(client, syncHistoryId) {
   if (!syncHistoryId) return;
   await client.query(
     `
-    UPDATE sync_history
-    SET
-      status = 'running',
-      started_at = COALESCE(started_at, NOW()),
-      updated_at = NOW()
-    WHERE id = $1
-  `,
+      UPDATE sync_history
+      SET status = 'running',
+          started_at = COALESCE(started_at, NOW()),
+          updated_at = NOW()
+      WHERE id = $1
+    `,
     [syncHistoryId],
   );
 }
@@ -63,12 +44,11 @@ async function updateSyncHistoryProgress(client, syncHistoryId, processedCount) 
   if (!syncHistoryId) return;
   await client.query(
     `
-    UPDATE sync_history
-    SET
-      processed_count = $2,
-      updated_at = NOW()
-    WHERE id = $1
-  `,
+      UPDATE sync_history
+      SET processed_count = $2,
+          updated_at = NOW()
+      WHERE id = $1
+    `,
     [syncHistoryId, processedCount],
   );
 }
@@ -77,14 +57,13 @@ async function markSyncHistoryCompleted(client, syncHistoryId, processedCount) {
   if (!syncHistoryId) return;
   await client.query(
     `
-    UPDATE sync_history
-    SET
-      status = 'completed',
-      processed_count = $2,
-      finished_at = NOW(),
-      updated_at = NOW()
-    WHERE id = $1
-  `,
+      UPDATE sync_history
+      SET status = 'completed',
+          processed_count = $2,
+          finished_at = NOW(),
+          updated_at = NOW()
+      WHERE id = $1
+    `,
     [syncHistoryId, processedCount],
   );
 }
@@ -93,22 +72,17 @@ async function markSyncHistoryFailed(client, syncHistoryId, processedCount, erro
   if (!syncHistoryId) return;
   await client.query(
     `
-    UPDATE sync_history
-    SET
-      status = 'failed',
-      processed_count = $2,
-      error_message = LEFT($3::text, 1000),
-      finished_at = NOW(),
-      updated_at = NOW()
-    WHERE id = $1
-  `,
+      UPDATE sync_history
+      SET status = 'failed',
+          processed_count = $2,
+          error_message = LEFT($3::text, 1000),
+          finished_at = NOW(),
+          updated_at = NOW()
+      WHERE id = $1
+    `,
     [syncHistoryId, processedCount, errorMessage || "unknown error"],
   );
 }
-
-/* -------------------------------------------------------------------------- */
-/*  Mapping + batch upsert into product_mirror                                */
-/* -------------------------------------------------------------------------- */
 
 function parseNumericIdFromGid(gid) {
   if (!gid) return null;
@@ -118,55 +92,49 @@ function parseNumericIdFromGid(gid) {
   return Number.isFinite(n) ? n : null;
 }
 
-/**
- * Map a Shopify Product node (from bulk JSONL) to product_mirror row shape.
- * Adjust field accesses to match your bulk query.
- */
-function mapProductNodeToRow(shopId, node) {
-  const productId = parseNumericIdFromGid(node.id);
+function normalizeStatus(status) {
+  const s = String(status ?? "").trim().toLowerCase();
+  if (s === "active" || s === "draft" || s === "archived") return s;
+  return "draft";
+}
 
-  const title = node.title ?? null;
-  const handle = node.handle ?? null;
-  const status = node.status ?? null; // ACTIVE, DRAFT, ARCHIVED
-  const productType = node.productType ?? null;
-  const vendor = node.vendor ?? null;
-  const templateSuffix = node.templateSuffix ?? null;
-  const tags = Array.isArray(node.tags) ? node.tags : [];
-  const publishedAt = node.publishedAt ?? null;
-  const createdAt = node.createdAt ?? null;
-  const updatedAt = node.updatedAt ?? null;
-  const onlineStoreUrl = node.onlineStoreUrl ?? null;
-  const seoTitle = node.seo?.title ?? null;
-  const seoDescription = node.seo?.description ?? null;
+function mapProductNodeToRow(shopId, node) {
+  const shopifyProductId = parseNumericIdFromGid(node.id);
+  if (!shopifyProductId) return null;
 
   return {
     shopId,
-    shopifyProductId: productId,
-    title,
-    handle,
-    status,
-    productType,
-    vendor,
-    templateSuffix,
-    tags,
-    publishedAt,
-    createdAt,
-    updatedAt,
-    onlineStoreUrl,
-    seoTitle,
-    seoDescription,
+    shopifyProductId,
+    category: node.category?.name ?? null,
+    descriptionHtml: node.descriptionHtml ?? node.description ?? null,
+    handle: node.handle ?? null,
+    productTypeCustom: node.productType ?? null,
+    status: normalizeStatus(node.status),
+    themeTemplate: node.templateSuffix ?? null,
+    title: node.title ?? null,
+    vendor: node.vendor ?? null,
+    createdAt: node.createdAt ?? null,
+    publishedAt: node.publishedAt ?? null,
+    updatedAt: node.updatedAt ?? null,
+
+    // until true publication + SEO-hidden sync exists
+    seoHidden: false,
+    visibleOnlineStore:
+      typeof node.isPublished === "boolean"
+        ? node.isPublished
+        : Boolean(node.publishedAt || node.onlineStoreUrl),
+    visiblePos: false,
+
+    option1Name: Array.isArray(node.options) ? node.options[0]?.name ?? null : null,
+    option2Name: Array.isArray(node.options) ? node.options[1]?.name ?? null : null,
+    option3Name: Array.isArray(node.options) ? node.options[2]?.name ?? null : null,
+
+    seoTitle: node.seo?.title ?? null,
+    seoDescription: node.seo?.description ?? null,
   };
 }
 
-/**
- * Batch upsert into product_mirror.
- * Assumes product_mirror has at least:
- *   (shop_id, shopify_product_id, title, handle, status, product_type,
- *    vendor, template_suffix, tags, published_at, created_at, updated_at,
- *    online_store_url, seo_title, seo_description, rollup_total_inventory,
- *    rollup_variant_count, created_at, updated_at)
- */
-async function upsertProductMirrorBatchPg({ shopId, records, client }) {
+async function upsertProductMirrorBatchPg({ records, client }) {
   if (!records.length) return;
 
   const values = [];
@@ -175,22 +143,34 @@ async function upsertProductMirrorBatchPg({ shopId, records, client }) {
 
   for (const r of records) {
     values.push(
-      `($${i++}, $${i++}, $${i++}, $${i++}, $${i++}, $${i++}, $${i++}, $${i++}, $${i++}, $${i++}, $${i++}, $${i++}, $${i++}, $${i++})`,
+      `(
+        $${i++}, $${i++}, $${i++}, $${i++}, $${i++},
+        $${i++}, $${i++}, $${i++}, $${i++}, $${i++},
+        $${i++}, $${i++}, $${i++}, $${i++}, $${i++},
+        $${i++}, $${i++}, $${i++}, $${i++}
+      )`,
     );
+
     params.push(
       r.shopId,
       r.shopifyProductId,
-      r.title,
+      r.category,
+      r.descriptionHtml,
       r.handle,
+      r.productTypeCustom,
       r.status,
-      r.productType,
+      r.themeTemplate,
+      r.title,
       r.vendor,
-      r.templateSuffix,
-      r.tags,
-      r.publishedAt,
       r.createdAt,
+      r.publishedAt,
       r.updatedAt,
-      r.onlineStoreUrl,
+      r.seoHidden,
+      r.visibleOnlineStore,
+      r.visiblePos,
+      r.option1Name,
+      r.option2Name,
+      r.option3Name,
       r.seoTitle,
       r.seoDescription,
     );
@@ -200,54 +180,53 @@ async function upsertProductMirrorBatchPg({ shopId, records, client }) {
     INSERT INTO product_mirror (
       shop_id,
       shopify_product_id,
-      title,
+      category,
+      description_html,
       handle,
+      product_type_custom,
       status,
-      product_type,
+      theme_template,
+      title,
       vendor,
-      template_suffix,
-      tags,
+      created_at,
       published_at,
-      created_at_source,
-      updated_at_source,
-      online_store_url,
+      updated_at,
+      seo_hidden,
+      visible_online_store,
+      visible_pos,
+      option1_name,
+      option2_name,
+      option3_name,
       seo_title,
       seo_description
     )
     VALUES ${values.join(", ")}
     ON CONFLICT (shop_id, shopify_product_id)
     DO UPDATE SET
-      title              = EXCLUDED.title,
-      handle             = EXCLUDED.handle,
-      status             = EXCLUDED.status,
-      product_type       = EXCLUDED.product_type,
-      vendor             = EXCLUDED.vendor,
-      template_suffix    = EXCLUDED.template_suffix,
-      tags               = EXCLUDED.tags,
-      published_at       = EXCLUDED.published_at,
-      created_at_source  = EXCLUDED.created_at_source,
-      updated_at_source  = EXCLUDED.updated_at_source,
-      online_store_url   = EXCLUDED.online_store_url,
-      seo_title          = EXCLUDED.seo_title,
-      seo_description    = EXCLUDED.seo_description,
-      updated_at         = NOW()
+      category             = EXCLUDED.category,
+      description_html     = EXCLUDED.description_html,
+      handle               = EXCLUDED.handle,
+      product_type_custom  = EXCLUDED.product_type_custom,
+      status               = EXCLUDED.status,
+      theme_template       = EXCLUDED.theme_template,
+      title                = EXCLUDED.title,
+      vendor               = EXCLUDED.vendor,
+      created_at           = EXCLUDED.created_at,
+      published_at         = EXCLUDED.published_at,
+      updated_at           = EXCLUDED.updated_at,
+      seo_hidden           = EXCLUDED.seo_hidden,
+      visible_online_store = EXCLUDED.visible_online_store,
+      visible_pos          = EXCLUDED.visible_pos,
+      option1_name         = EXCLUDED.option1_name,
+      option2_name         = EXCLUDED.option2_name,
+      option3_name         = EXCLUDED.option3_name,
+      seo_title            = EXCLUDED.seo_title,
+      seo_description      = EXCLUDED.seo_description
   `;
 
   await client.query(sql, params);
 }
 
-/* -------------------------------------------------------------------------- */
-/*  Main worker entrypoint                                                    */
-/* -------------------------------------------------------------------------- */
-
-/**
- * Process Shopify Product Bulk Operation JSONL and hydrate product_mirror.
- *
- * @param {object} params
- * @param {number} params.shopId
- * @param {number} params.syncHistoryId
- * @param {NodeJS.ReadableStream} params.jsonlStream
- */
 export async function runProductMirrorBulkWorker({
   shopId,
   syncHistoryId,
@@ -270,38 +249,30 @@ export async function runProductMirrorBulkWorker({
     });
 
     for await (const line of rl) {
-      if (!line || !line.trim()) continue;
+      if (!line?.trim()) continue;
 
       processed += 1;
-
       if (processed > MAX_STREAM_RECORDS) {
-        throw new Error(
-          `productSync.tooManyRecords: exceeded MAX_STREAM_RECORDS=${MAX_STREAM_RECORDS}`,
-        );
+        throw new Error(`productSync.tooManyRecords: exceeded MAX_STREAM_RECORDS=${MAX_STREAM_RECORDS}`);
       }
 
       let parsed;
       try {
         parsed = JSON.parse(line);
-      } catch (err) {
-        logger.warn("[productMirrorBulkWorker.pg] Skipping invalid JSONL line", {
-          shopId,
-          lineSnippet: line.slice(0, 200),
-        });
+      } catch {
         continue;
       }
 
-      // Some bulk payloads wrap the product in { "node": { ... } }
       const node = parsed.node || parsed;
       if (!node?.id) continue;
 
       const row = mapProductNodeToRow(shopId, node);
-      if (!row.shopifyProductId) continue;
+      if (!row) continue;
 
       batch.push(row);
 
       if (batch.length >= HYDRATION_BATCH_SIZE) {
-        await upsertProductMirrorBatchPg({ shopId, records: batch, client });
+        await upsertProductMirrorBatchPg({ records: batch, client });
         batch = [];
       }
 
@@ -311,8 +282,7 @@ export async function runProductMirrorBulkWorker({
     }
 
     if (batch.length > 0) {
-      await upsertProductMirrorBatchPg({ shopId, records: batch, client });
-      batch = [];
+      await upsertProductMirrorBatchPg({ records: batch, client });
     }
 
     await markSyncHistoryCompleted(client, syncHistoryId, processed);
