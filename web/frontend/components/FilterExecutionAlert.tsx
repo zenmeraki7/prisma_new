@@ -15,11 +15,8 @@ interface FilterExecutionAlertProps {
   mode: FilterExecutionMode;
   guardrail: FilterGuardrailInfo | null;
   warnings: string[];
-
   astDepth?: number | null;
   fastFiltersCount?: number | null;
-  snapshotFiltersCount?: number | null;
-
   debug?: boolean;
 }
 
@@ -29,14 +26,10 @@ export const FilterExecutionAlert: React.FC<FilterExecutionAlertProps> = ({
   warnings,
   astDepth,
   fastFiltersCount,
-  snapshotFiltersCount,
   debug = false,
 }) => {
-  const normalizedMode = normalizeDisplayMode(mode);
-  const tone = modeToTone(normalizedMode, guardrail);
-
   const isNoop =
-    normalizedMode === "FAST_ONLY" &&
+    mode === "FAST_ONLY" &&
     !guardrail?.limited &&
     warnings.length === 0 &&
     !debug;
@@ -44,13 +37,13 @@ export const FilterExecutionAlert: React.FC<FilterExecutionAlertProps> = ({
   if (isNoop) return null;
 
   return (
-    <Banner title={titleForMode(normalizedMode, guardrail)} tone={tone}>
+    <Banner title={titleForMode(mode, guardrail)} tone={toneForMode(mode, guardrail)}>
       <BlockStack gap="100">
         <InlineStack gap="200" align="space-between" blockAlign="center">
           <InlineStack gap="200" blockAlign="center">
-            <Badge>{modeLabel(normalizedMode)}</Badge>
+            <Badge>{modeLabel(mode)}</Badge>
             <Text as="span" variant="bodySm">
-              {subtitleForMode(normalizedMode, guardrail)}
+              {subtitleForMode(mode, guardrail)}
             </Text>
           </InlineStack>
 
@@ -76,28 +69,19 @@ export const FilterExecutionAlert: React.FC<FilterExecutionAlertProps> = ({
         )}
 
         {debug && (
-          <BlockStack gap="050">
-            <Text as="p" variant="bodySm" tone="subdued">
-              Debug: AST depth {astDepth ?? "–"} • FAST leaves{" "}
-              {fastFiltersCount ?? "–"} • OTHER leaves{" "}
-              {snapshotFiltersCount ?? "–"}
-              {guardrail
-                ? ` • matched ${guardrail.totalMatched} • shown ${guardrail.shownCount} • pageSize ${guardrail.pageSize} • hasMore ${String(
-                    guardrail.hasMore,
-                  )} • limited ${String(guardrail.limited)}`
-                : ""}
-            </Text>
-          </BlockStack>
+          <Text as="p" variant="bodySm" tone="subdued">
+            Debug: AST depth {astDepth ?? "–"} • FAST leaves {fastFiltersCount ?? "–"}
+            {guardrail
+              ? ` • matched ${guardrail.totalMatched} • shown ${guardrail.shownCount} • pageSize ${guardrail.pageSize} • hasMore ${String(
+                  guardrail.hasMore,
+                )} • limited ${String(guardrail.limited)}`
+              : ""}
+          </Text>
         )}
       </BlockStack>
     </Banner>
   );
 };
-
-function normalizeDisplayMode(mode: FilterExecutionMode): FilterExecutionMode {
-  if (mode === "SNAPSHOT_ONLY") return "AUTO";
-  return mode;
-}
 
 function formatNumber(value: number | null | undefined): string {
   if (typeof value !== "number" || !Number.isFinite(value)) return "0";
@@ -105,17 +89,8 @@ function formatNumber(value: number | null | undefined): string {
 }
 
 function modeLabel(mode: FilterExecutionMode): string {
-  switch (mode) {
-    case "FAST_ONLY":
-      return "Fast search";
-    case "HYBRID":
-      return "Advanced search";
-    case "AUTO":
-      return "Automatic";
-    case "SNAPSHOT_ONLY":
-    default:
-      return "Automatic";
-  }
+  if (mode === "FAST_ONLY") return "Fast search";
+  return "Automatic";
 }
 
 function titleForMode(
@@ -126,17 +101,11 @@ function titleForMode(
     return "Showing a limited set of results";
   }
 
-  switch (mode) {
-    case "FAST_ONLY":
-      return "Live search applied";
-    case "HYBRID":
-      return "Advanced search applied";
-    case "AUTO":
-      return "Filter applied";
-    case "SNAPSHOT_ONLY":
-    default:
-      return "Filter applied";
+  if (mode === "FAST_ONLY") {
+    return "Live search applied";
   }
+
+  return "Filter applied";
 }
 
 function subtitleForMode(
@@ -149,28 +118,18 @@ function subtitleForMode(
     )} of ${formatNumber(guardrail.totalMatched)} matching products.`;
   }
 
-  switch (mode) {
-    case "FAST_ONLY":
-      return "Results are calculated from the latest product data.";
-    case "HYBRID":
-      return "Some filters require a broader search strategy for accurate results.";
-    case "AUTO":
-      return "Filters are applied automatically based on performance and accuracy.";
-    case "SNAPSHOT_ONLY":
-    default:
-      return "Filters are applied automatically based on performance and accuracy.";
+  if (mode === "FAST_ONLY") {
+    return "Results are calculated from the latest product data.";
   }
+
+  return "Filters are applied automatically.";
 }
 
-function modeToTone(
+function toneForMode(
   mode: FilterExecutionMode,
   guardrail: FilterGuardrailInfo | undefined | null,
 ): "info" | "success" | "warning" | "critical" {
-  if (guardrail?.limited) {
-    return "warning";
-  }
-
+  if (guardrail?.limited) return "warning";
   if (mode === "FAST_ONLY") return "success";
-  if (mode === "HYBRID" || mode === "AUTO") return "info";
   return "info";
 }

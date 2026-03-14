@@ -1,33 +1,26 @@
 // FILE: web/graphql/filtering/productsByFilterResolver.ts
 
 import { GraphQLError } from "graphql";
-import type { Prisma } from "@prisma/client";
 import { prisma } from "../../db/prisma.js";
-
 import { astFromJson } from "../../lib/filters/astFromJson.js";
 import { FilterPlanner } from "../../lib/filters/planner.js";
 
 export type FilterExecutionMode =
   | "AUTO"
-  | "FAST_ONLY"
-  | "SNAPSHOT_ONLY"
-  | "HYBRID";
+  | "FAST_ONLY";
 
 type ProductsByFilterArgs = {
   input: {
-    filter: unknown;          // JSON AST from client
-    mode: FilterExecutionMode;
+    filter: unknown;
+    mode?: FilterExecutionMode;
     first: number;
     after?: string | null;
-    snapshotRunId?: string | null;
   };
 };
 
 type Context = {
   shopId: string;
 };
-
-const CANDIDATE_LIMIT = 5000;
 
 export async function productsByFilterResolver(
   _parent: unknown,
@@ -36,14 +29,12 @@ export async function productsByFilterResolver(
 ) {
   const {
     filter: rawFilter,
-    mode,
     first: rawFirst,
     after,
-    snapshotRunId,
   } = args.input;
+
   const { shopId } = ctx;
 
-  // 1) Parse JSON → AST
   let expr = null;
   try {
     expr = astFromJson(rawFilter);
@@ -53,47 +44,11 @@ export async function productsByFilterResolver(
     });
   }
 
-  // 2) Plan (split FAST vs SNAPSHOT)
-  const plan = FilterPlanner.plan(expr, {
-    shopId,
-    snapshotRunId: snapshotRunId ?? undefined,
-  });
+  const plan = FilterPlanner.plan(expr, { shopId });
+  const where = plan.fastQuery;
 
-  // For now, we derive executionMode from meta or fall back
-  const executionMode: FilterExecutionMode =
-    (plan.meta as any)?.mode ?? "FAST_ONLY";
-
-  const where: Prisma.ProductLiteWhereInput = plan.fastQuery;
-
-  // 3) Guardrail: candidate count
-  let candidateCount = 0;
-  let candidateLimitHit = false;
-
-  try {
-    candidateCount = await prisma.productLite.count({ where });
-    candidateLimitHit = candidateCount > CANDIDATE_LIMIT;
-  } catch (e) {
-    // If count fails for any reason, don't block the query – just log.
-    console.error("[productsByFilter] Count failed", e);
-  }
-
-  const guardrail = {
-    candidateCount,
-    candidateLimit: CANDIDATE_LIMIT,
-    candidateLimitHit,
-  };
-
-  const warnings: string[] = [];
-  if (candidateLimitHit) {
-    warnings.push(
-      `More than ${CANDIDATE_LIMIT} products matched. Showing a partial result set.`,
-    );
-  }
-
-  // 4) Clamp page size
   const take = clampFirst(rawFirst);
 
-  // 5) Cursor decoding (BigInt-safe)
   let cursor: { id: bigint } | undefined;
   if (after) {
     try {
@@ -106,33 +61,63 @@ export async function productsByFilterResolver(
     }
   }
 
+  let totalMatched = 0;
   try {
-    // 6) Execute FAST query only
-    // IMPORTANT: no `include: { tagsJoin: true }` anymore.
+    totalMatched = await prisma.productLite.count({ where });
+  } catch (e) {
+    console.error("[productsByFilter] Count failed", e);
+  }
+
+  const warnings: string[] = [];
+
+  try {
     const rows = await prisma.productLite.findMany({
       where,
       take: take + 1,
       skip: cursor ? 1 : 0,
       cursor,
-      orderBy: { updatedAtShopify: "desc" }, // or createdAtShopify
+      orderBy: { updatedAtShopify: "desc" },
+      include: {
+        variantRollup: true,
+      },
     });
 
     const hasNextPage = rows.length > take;
-    const items = hasNextPage ? rows.slice(0, take) : rows;
+    const visibleRows = hasNextPage ? rows.slice(0, take) : rows;
 
     const nextCursor =
-      hasNextPage && items.length > 0
+      hasNextPage && visibleRows.length > 0
         ? Buffer.from(
-            items[items.length - 1].id.toString(),
+            visibleRows[visibleRows.length - 1].id.toString(),
             "utf8",
           ).toString("base64")
         : null;
 
+    const items = visibleRows.map((row) => ({
+      id: row.id,
+      title: row.title,
+      handle: row.handle,
+      status: row.status,
+      vendor: row.vendor,
+      productType: row.productType,
+      tags: row.tags ?? [],
+      hasImages: row.hasImages,
+      totalInventory: row.variantRollup?.totalInventory ?? 0,
+      variantCount: row.variantRollup?.variantCount ?? 0,
+      updatedAtShopify: row.updatedAtShopify,
+    }));
+
     return {
       items,
       nextCursor,
-      mode: executionMode,
-      guardrail,
+      mode: "FAST_ONLY",
+      guardrail: {
+        totalMatched,
+        shownCount: items.length,
+        pageSize: take,
+        hasMore: hasNextPage,
+        limited: hasNextPage,
+      },
       warnings,
     };
   } catch (e: any) {

@@ -1,4 +1,3 @@
-// web/db/schema-types.d.ts
 import type { Prisma } from "@prisma/client";
 
 type ScalarFieldEnumKeys<E> = E extends Record<string, any>
@@ -13,10 +12,18 @@ export type VariantLiteField = ScalarFieldEnumKeys<
   typeof Prisma.VariantLiteScalarFieldEnum
 >;
 
-export type SnapshotProductField = ScalarFieldEnumKeys<
-  typeof Prisma.SnapshotProductScalarFieldEnum
+export type VariantRollupField = ScalarFieldEnumKeys<
+  typeof Prisma.VariantRollupScalarFieldEnum
+>;
+
+export type ProductContentField = ScalarFieldEnumKeys<
+  typeof Prisma.ProductContentScalarFieldEnum
+>;
+
+export type ProductCollectionField = ScalarFieldEnumKeys<
+  typeof Prisma.ProductCollectionScalarFieldEnum
 >;
 
 export type VariantInventoryLocationField = ScalarFieldEnumKeys<
-  typeof Prisma.VariantInventoryLocationScalarFieldEnum
+  typeof Prisma.ProductInventoryLocationScalarFieldEnum
 >;

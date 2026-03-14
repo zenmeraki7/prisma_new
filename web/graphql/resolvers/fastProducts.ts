@@ -14,7 +14,7 @@ interface GraphQLContext {
 interface FastProductsArgs {
   first?: number | null;
   after?: string | null;
-  filter?: unknown; // JSON AST (FilterExpr)
+  filter?: unknown;
   sort?: {
     field:
       | "TITLE"
@@ -42,7 +42,6 @@ export const fastProductsResolvers = {
         sort,
       } = args;
 
-      // 1. Parse Filter
       let filterExpr = null;
       try {
         filterExpr = astFromJson(rawFilter);
@@ -52,19 +51,9 @@ export const fastProductsResolvers = {
         });
       }
 
-      // 2. Plan Filter
       const plan = FilterPlanner.plan(filterExpr, { shopId });
-
-      if (plan.meta.snapshotFiltersCount > 0) {
-        throw new GraphQLError(
-          "This query only supports FAST-plane filters.",
-          { extensions: { code: "BAD_USER_INPUT" } },
-        );
-      }
-
       const where = plan.fastQuery;
 
-      // 3. Sorting & Pagination
       const take = clampFirst(rawFirst);
       const orderBy = mapSortToOrderBy(sort);
 
@@ -80,13 +69,15 @@ export const fastProductsResolvers = {
         }
       }
 
-      // 4. Prisma Query
       const items = await prisma.productLite.findMany({
         where,
         take: take + 1,
         skip: cursor ? 1 : 0,
         cursor,
         orderBy,
+        include: {
+          variantRollup: true,
+        },
       });
 
       const hasNextPage = items.length > take;
@@ -112,7 +103,9 @@ export const fastProductsResolvers = {
 
 // ---------------- HELPERS ----------------
 
-function mapProductNode(row: Prisma.ProductLiteGetPayload<{}>) {
+function mapProductNode(
+  row: Prisma.ProductLiteGetPayload<{ include: { variantRollup: true } }>,
+) {
   return {
     id: row.id.toString(),
     title: row.title,
@@ -122,9 +115,11 @@ function mapProductNode(row: Prisma.ProductLiteGetPayload<{}>) {
     productType: row.productType,
     tags: row.tags,
     hasImages: row.hasImages,
-    updatedAtShopify: row.updatedAtShopify.toISOString(),
-    totalInventory: row.totalInventory ?? 0,
-    variantCount: row.variantCount ?? 0,
+    updatedAtShopify: row.updatedAtShopify
+      ? row.updatedAtShopify.toISOString()
+      : null,
+    totalInventory: row.variantRollup?.totalInventory ?? 0,
+    variantCount: row.variantRollup?.variantCount ?? 0,
   };
 }
 
@@ -148,10 +143,10 @@ function mapSortToOrderBy(
       return { publishedAtShopify: dir };
 
     case "TOTAL_INVENTORY":
-      return { totalInventory: dir };
+      return { variantRollup: { totalInventory: dir } };
 
     case "VARIANT_COUNT":
-      return { variantCount: dir };
+      return { variantRollup: { variantCount: dir } };
 
     default:
       return { createdAtShopify: "desc" };

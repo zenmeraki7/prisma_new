@@ -5,9 +5,7 @@ import type { FilterExpr } from "../lib/filters/dsl";
 
 export type FilterExecutionMode =
   | "AUTO"
-  | "FAST_ONLY"
-  | "SNAPSHOT_ONLY"
-  | "HYBRID";
+  | "FAST_ONLY";
 
 export interface FilterGuardrailInfo {
   totalMatched: number;
@@ -72,7 +70,6 @@ const PRODUCTS_BY_FILTER_QUERY = /* GraphQL */ `
 export interface UseProductsByFilterOptions {
   requestKey?: number;
   filterExpr: FilterExpr | null;
-  snapshotRunId?: string | null;
   pageSize?: number;
   enabled?: boolean;
 }
@@ -81,7 +78,6 @@ export function useProductsByFilter(options: UseProductsByFilterOptions) {
   const {
     requestKey = 0,
     filterExpr,
-    snapshotRunId,
     pageSize = 50,
     enabled = true,
   } = options;
@@ -96,9 +92,8 @@ export function useProductsByFilter(options: UseProductsByFilterOptions) {
       filter: filterExpr,
       mode: "AUTO" as const,
       first: pageSize,
-      snapshotRunId: snapshotRunId ?? undefined,
     }),
-    [filterExpr, pageSize, snapshotRunId],
+    [filterExpr, pageSize],
   );
 
   const query = useInfiniteQuery<ProductsByFilterPage>({
@@ -106,7 +101,6 @@ export function useProductsByFilter(options: UseProductsByFilterOptions) {
       "productsByFilter",
       requestKey,
       pageSize,
-      snapshotRunId ?? null,
       filterKey,
     ],
     enabled,

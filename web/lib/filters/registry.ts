@@ -7,7 +7,6 @@ import type {
   ProductContentField,
   ProductCollectionField,
   VariantInventoryLocationField,
-  SnapshotProductField,
 } from "../../db/schema-types";
 
 // ---------------------------------------------------------
@@ -15,7 +14,7 @@ import type {
 // ---------------------------------------------------------
 
 export type FilterScope = "product" | "variant";
-export type FilterPlane = "FAST" | "SNAPSHOT";
+export type FilterPlane = "FAST";
 
 export type ValueKind =
   | "string"
@@ -46,16 +45,12 @@ export interface FullTextConfig {
   config?: string;
 }
 
-/**
- * Split FAST-plane models for optimization
- */
 export type ModelName =
   | "ProductLite"
   | "VariantLite"
   | "VariantRollup"
   | "ProductContent"
   | "ProductCollection"
-  | "SnapshotProduct"
   | "VariantInventoryLocation";
 
 export interface ModelFieldMap {
@@ -64,7 +59,6 @@ export interface ModelFieldMap {
   VariantRollup: VariantRollupField;
   ProductContent: ProductContentField;
   ProductCollection: ProductCollectionField;
-  SnapshotProduct: SnapshotProductField;
   VariantInventoryLocation: VariantInventoryLocationField;
 }
 
@@ -78,13 +72,11 @@ export interface DbBinding<M extends ModelName = ModelName> {
   plane: FilterPlane;
   model: M;
   field: ModelFieldMap[M];
-
   relationPath?: string;
   multiValue?: boolean;
   multiValueStrategy?: MultiValueStrategy;
   computed?: boolean;
   indexHint?: string;
-  requiresSnapshotRunId?: boolean;
 }
 
 export interface EnumValue {
@@ -111,12 +103,11 @@ export type FilterKey =
   | "product.option3Name"
   | "product.id"
   | "product.productType"
-  | "product.searchEngineVisibility"
   | "product.status"
   | "product.tag"
   | "product.template"
   | "product.title"
-  | "product.search"          // <-- NEW: generic search key
+  | "product.search"
   | "product.variantCount"
   | "product.vendor"
   | "product.visibleOnlineStore"
@@ -168,7 +159,7 @@ export function defineFilter<M extends ModelName>(
 }
 
 // ---------------------------------------------------------
-// Operator sets (canonical)
+// Operator sets
 // ---------------------------------------------------------
 
 export const STRING_OPERATORS: FilterOperator[] = [
@@ -247,9 +238,6 @@ export const MULTIVALUE_STRING_OPERATORS: FilterOperator[] = [
 // ---------------------------------------------------------
 
 export const FILTER_REGISTRY: { [K in FilterKey]: FilterDefinition } = {
-  //
-  // PRODUCT FIELDS
-  //
   "product.category": defineFilter({
     key: "product.category",
     label: "Category",
@@ -373,7 +361,7 @@ export const FILTER_REGISTRY: { [K in FilterKey]: FilterDefinition } = {
       plane: "FAST",
       model: "VariantRollup",
       field: "totalInventory",
-      relationPath: "rollup",
+      relationPath: "variantRollup",
       indexHint: "idx_variant_rollup_total_inventory",
     },
     ui: { widget: "number" },
@@ -450,26 +438,6 @@ export const FILTER_REGISTRY: { [K in FilterKey]: FilterDefinition } = {
     ui: { widget: "text" },
   }),
 
-  "product.searchEngineVisibility": defineFilter({
-    key: "product.searchEngineVisibility",
-    label: "SEO Visibility",
-    scope: "product",
-    valueKind: "enum",
-    operators: ENUM_OPERATORS,
-    enumValues: [
-      { value: "visible", label: "Visible" },
-      { value: "hidden", label: "Hidden" },
-    ],
-    db: {
-      plane: "SNAPSHOT",
-      model: "SnapshotProduct",
-      field: "searchEngineVisibility",
-      requiresSnapshotRunId: true,
-      indexHint: "idx_snapshot_product_visibility",
-    },
-    ui: { widget: "select" },
-  }),
-
   "product.status": defineFilter({
     key: "product.status",
     label: "Status",
@@ -540,8 +508,6 @@ export const FILTER_REGISTRY: { [K in FilterKey]: FilterDefinition } = {
     ui: { widget: "text" },
   }),
 
-  // NEW: Generic "Search" filter (initially aliases title FTS).
-  // Later you can point this at a richer combined FTS column.
   "product.search": defineFilter({
     key: "product.search",
     label: "Search",
@@ -551,7 +517,7 @@ export const FILTER_REGISTRY: { [K in FilterKey]: FilterDefinition } = {
     db: {
       plane: "FAST",
       model: "ProductLite",
-      field: "title", // alias: same column as product.title for now
+      field: "title",
       indexHint: "idx_product_lite_title_fts",
     },
     fullText: {
@@ -574,7 +540,7 @@ export const FILTER_REGISTRY: { [K in FilterKey]: FilterDefinition } = {
       plane: "FAST",
       model: "VariantRollup",
       field: "variantCount",
-      relationPath: "rollup",
+      relationPath: "variantRollup",
       indexHint: "idx_variant_rollup_variant_count",
     },
     ui: { widget: "number" },
@@ -665,9 +631,6 @@ export const FILTER_REGISTRY: { [K in FilterKey]: FilterDefinition } = {
     ui: { widget: "textarea" },
   }),
 
-  //
-  // VARIANT FIELDS
-  //
   "variant.barcode": defineFilter({
     key: "variant.barcode",
     label: "Barcode",
@@ -881,7 +844,7 @@ export const FILTER_REGISTRY: { [K in FilterKey]: FilterDefinition } = {
     db: {
       plane: "FAST",
       model: "VariantLite",
-      field: "profitMargin",
+      field: "profitMarginPct",
       relationPath: "variants",
       computed: true,
       indexHint: "idx_variant_lite_profit_margin",
@@ -1001,12 +964,8 @@ export const FAST_FILTER_KEYS = ALL_FILTER_KEYS.filter(
   (key) => FILTER_REGISTRY[key].db.plane === "FAST",
 );
 
-export const SNAPSHOT_FILTER_KEYS = ALL_FILTER_KEYS.filter(
-  (key) => FILTER_REGISTRY[key].db.plane === "SNAPSHOT",
-);
-
 // ---------------------------------------------------------
-// Runtime invariants (fail-fast if registry is misconfigured)
+// Runtime invariants
 // ---------------------------------------------------------
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -1019,7 +978,6 @@ function validateRegistry() {
   for (const key of ALL_FILTER_KEYS) {
     const def = FILTER_REGISTRY[key];
 
-    // 1) Scope vs key prefix
     if (def.scope === "product") {
       assert(
         key.startsWith("product."),
@@ -1032,7 +990,6 @@ function validateRegistry() {
       );
     }
 
-    // 2) FTS filters: only TEXT_FTS_OPERATORS
     if (def.fullText) {
       for (const op of def.operators) {
         assert(
@@ -1042,7 +999,6 @@ function validateRegistry() {
       }
     }
 
-    // 3) multiValue fields must define a strategy
     if (def.db.multiValue) {
       assert(
         !!def.db.multiValueStrategy,
@@ -1050,7 +1006,6 @@ function validateRegistry() {
       );
     }
 
-    // 4) relation_some must have relationPath
     if (def.db.multiValueStrategy === "relation_some") {
       assert(
         !!def.db.relationPath,
@@ -1058,13 +1013,10 @@ function validateRegistry() {
       );
     }
 
-    // 5) SNAPSHOT-plane filters must require snapshotRunId
-    if (def.db.plane === "SNAPSHOT") {
-      assert(
-        def.db.requiresSnapshotRunId === true,
-        `Snapshot filter "${key}" must set db.requiresSnapshotRunId=true to avoid cross-run scans.`,
-      );
-    }
+    assert(
+      def.db.plane === "FAST",
+      `Filter "${key}" has non-FAST plane "${def.db.plane}" in FAST-only registry.`,
+    );
   }
 }
 

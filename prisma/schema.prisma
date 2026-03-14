@@ -253,7 +253,7 @@ model ProductInventoryLocation {
 enum JobType {
   FAST_FULL_SYNC
   FAST_DELTA_REFRESH
-  SNAPSHOT_RUN
+
 }
 
 enum JobStatus {

@@ -195,7 +195,7 @@ export const FILTERS: FrontendFilterConfig[] = [
     key: "product.searchEngineVisibility",
     label: "SEO Visibility",
     scope: "product",
-    plane: "SNAPSHOT",
+    plane: "FAST",
     valueKind: "enum",
     operators: ["EQ", "NEQ", "IN", "NOT_IN"],
     widget: "select",

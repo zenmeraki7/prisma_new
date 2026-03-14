@@ -127,7 +127,6 @@ function toLowerStatus(value) {
 
 function normalizeWeightUnitInput(value) {
   const s = String(value ?? "").trim().toLowerCase();
-
   if (!s) return null;
 
   if (s === "g" || s === "gram" || s === "grams") return "g";
@@ -149,7 +148,6 @@ function normalizeWeightUnitArray(value) {
 
 function normalizeShopifyWeightUnit(value) {
   const s = String(value ?? "").trim().toLowerCase();
-
   if (!s) return null;
 
   if (s === "g" || s === "gram" || s === "grams") return "g";
@@ -180,6 +178,37 @@ function selectedOptionValue(selectedOptions, index) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function reconnectPrisma() {
+  try {
+    await prisma.$disconnect();
+  } catch {}
+
+  await sleep(300);
+
+  try {
+    await prisma.$connect();
+  } catch {}
+}
+
+function isRetryableDbError(err) {
+  const msg = String(err?.message || err || "");
+
+  return (
+    err?.code === "P1001" ||
+    err?.code === "P1002" ||
+    err?.name === "PrismaClientInitializationError" ||
+    msg.includes("Can't reach database server") ||
+    msg.includes("Please make sure your database server is running") ||
+    msg.includes("Connection terminated") ||
+    msg.includes("Connection reset") ||
+    msg.includes("server closed the connection unexpectedly") ||
+    msg.includes("Unable to start a transaction in the given time") ||
+    msg.includes("timeout") ||
+    msg.includes("Timed out") ||
+    msg.includes("Too many connections")
+  );
 }
 
 function computeProfitMarginPct(price, cost) {
@@ -1268,22 +1297,22 @@ function buildVariantRecordsFromProduct(shopId, productNode) {
       const price = toNullableDecimalNumber(variant.price);
       const compareAtPrice = toNullableDecimalNumber(variant.compareAtPrice);
 
-      let cost = null;
-      if (variant.inventoryItem?.unitCost?.amount != null) {
-        cost = toNullableDecimalNumber(variant.inventoryItem.unitCost.amount);
-      } else if (variant.inventoryItem?.cost != null) {
-        cost = toNullableDecimalNumber(variant.inventoryItem.cost);
-      }
+      const inventoryItem = variant.inventoryItem ?? null;
 
-      const weightValue =
-        variant.inventoryItem?.measurement?.weight?.value ??
-        variant.weight ??
-        null;
+      const cost =
+        inventoryItem?.unitCost?.amount != null
+          ? toNullableDecimalNumber(inventoryItem.unitCost.amount)
+          : null;
+
+      const rawWeightValue =
+        inventoryItem?.measurement?.weight?.value != null
+          ? inventoryItem.measurement.weight.value
+          : null;
 
       const rawWeightUnit =
-        variant.inventoryItem?.measurement?.weight?.unit ??
-        variant.weightUnit ??
-        null;
+        inventoryItem?.measurement?.weight?.unit != null
+          ? inventoryItem.measurement.weight.unit
+          : null;
 
       const normalizedWeightUnit = normalizeShopifyWeightUnit(rawWeightUnit);
 
@@ -1298,25 +1327,24 @@ function buildVariantRecordsFromProduct(shopId, productNode) {
         compareAtPrice,
         cost,
         profitMarginPct: computeProfitMarginPct(price, cost),
-        taxable: typeof variant.taxable === "boolean" ? variant.taxable : null,
+        taxable:
+          typeof variant.taxable === "boolean" ? variant.taxable : null,
         trackQuantity:
-          typeof variant.inventoryItem?.tracked === "boolean"
-            ? variant.inventoryItem.tracked
-            : typeof variant.inventoryQuantity === "number"
-              ? true
-              : null,
+          typeof inventoryItem?.tracked === "boolean"
+            ? inventoryItem.tracked
+            : null,
         requiresShipping:
-          typeof variant.requiresShipping === "boolean"
-            ? variant.requiresShipping
+          typeof inventoryItem?.requiresShipping === "boolean"
+            ? inventoryItem.requiresShipping
             : null,
         inventoryQty:
           typeof variant.inventoryQuantity === "number"
             ? variant.inventoryQuantity
             : 0,
         inventoryPolicy: variant.inventoryPolicy ?? null,
-        countryOfOrigin: variant.inventoryItem?.countryCodeOfOrigin ?? null,
-        hsTariffCode: variant.inventoryItem?.harmonizedSystemCode ?? null,
-        weightGrams: weightToGrams(weightValue, normalizedWeightUnit),
+        countryOfOrigin: inventoryItem?.countryCodeOfOrigin ?? null,
+        hsTariffCode: inventoryItem?.harmonizedSystemCode ?? null,
+        weightGrams: weightToGrams(rawWeightValue, normalizedWeightUnit),
         weightUnit: normalizedWeightUnit,
         option1Value: selectedOptionValue(variant.selectedOptions, 0),
         option2Value: selectedOptionValue(variant.selectedOptions, 1),
@@ -1360,52 +1388,8 @@ function buildVariantRollupData(variants) {
   };
 }
 
-function buildProductInventoryLocationRows(shopId, productNode) {
-  const rows = [];
-  const seen = new Map();
-
-  const variantEdges = productNode?.variants?.edges || [];
-
-  for (const edge of variantEdges) {
-    const variant = edge?.node;
-    if (!variant) continue;
-
-    const inventoryLevels = variant.inventoryItem?.inventoryLevels?.edges || [];
-
-    for (const inventoryEdge of inventoryLevels) {
-      const level = inventoryEdge?.node;
-      const locationId = normalizeString(level?.location?.id);
-      if (!locationId) continue;
-
-      const locationName = normalizeString(level?.location?.name) || null;
-      const availableRaw = parseNumberInput(level?.quantities?.[0]?.quantity);
-      const available = availableRaw == null ? 0 : availableRaw;
-
-      const key = `${shopId}|${productNode.id}|${locationId}`;
-
-      if (!seen.has(key)) {
-        const row = {
-          shopId,
-          productId: productNode.id,
-          locationId,
-          locationName,
-          hasInventory: available > 0,
-          totalQuantity: available,
-        };
-        seen.set(key, row);
-        rows.push(row);
-      } else {
-        const existing = seen.get(key);
-        existing.totalQuantity = (existing.totalQuantity ?? 0) + available;
-        existing.hasInventory = existing.hasInventory || available > 0;
-        if (!existing.locationName && locationName) {
-          existing.locationName = locationName;
-        }
-      }
-    }
-  }
-
-  return rows;
+function buildProductInventoryLocationRows(_shopId, _productNode) {
+  return [];
 }
 
 async function syncSingleProductGraphNode(shopId, productNode) {
@@ -1515,11 +1499,11 @@ async function syncSingleProductGraphNode(shopId, productNode) {
     },
   });
 
-  await prisma.productInventoryLocation.deleteMany({
-    where: { shopId, productId },
-  });
-
   if (inventoryLocationRows.length > 0) {
+    await prisma.productInventoryLocation.deleteMany({
+      where: { shopId, productId },
+    });
+
     await prisma.productInventoryLocation.createMany({
       data: inventoryLocationRows,
       skipDuplicates: true,
@@ -1557,7 +1541,6 @@ query SyncProducts($first: Int!, $after: String) {
 
         options {
           name
-          values
         }
 
         variants(first: 100) {
@@ -1572,12 +1555,10 @@ query SyncProducts($first: Int!, $after: String) {
               inventoryQuantity
               inventoryPolicy
               taxable
-              requiresShipping
-              weight
-              weightUnit
 
               inventoryItem {
                 tracked
+                requiresShipping
                 unitCost {
                   amount
                 }
@@ -1587,20 +1568,6 @@ query SyncProducts($first: Int!, $after: String) {
                   weight {
                     value
                     unit
-                  }
-                }
-                inventoryLevels(first: 50) {
-                  edges {
-                    node {
-                      location {
-                        id
-                        name
-                      }
-                      quantities(names: ["available"]) {
-                        name
-                        quantity
-                      }
-                    }
                   }
                 }
               }
@@ -1706,73 +1673,73 @@ app.post("/api/graphql", async (req, res) => {
       });
     }
 
-   if (query.includes("syncProductsToDb")) {
-  const first = Math.min(
-    Math.max(Number(variables?.first ?? SYNC_PRODUCTS_PAGE_MAX), 1),
-    SYNC_PRODUCTS_PAGE_MAX,
-  );
-  const after = variables?.after ?? null;
+    if (query.includes("syncProductsToDb")) {
+      const first = Math.min(
+        Math.max(Number(variables?.first ?? SYNC_PRODUCTS_PAGE_MAX), 1),
+        SYNC_PRODUCTS_PAGE_MAX,
+      );
+      const after = variables?.after ?? null;
 
-  const response = await client.request(SYNC_PRODUCTS_QUERY, {
-    variables: { first, after },
-  });
+      const response = await client.request(SYNC_PRODUCTS_QUERY, {
+        variables: { first, after },
+      });
 
-  const edges = response?.data?.products?.edges || [];
+      const edges = response?.data?.products?.edges || [];
 
-  await mapWithConcurrency(
-    edges,
-    SYNC_PRODUCT_CONCURRENCY,
-    async (edge) => {
-      const productNode = edge?.node;
-      if (!productNode?.id) return;
+      await mapWithConcurrency(
+        edges,
+        SYNC_PRODUCT_CONCURRENCY,
+        async (edge) => {
+          const productNode = edge?.node;
+          if (!productNode?.id) return;
 
-      let lastError = null;
-      let synced = false;
+          let lastError = null;
+          let synced = false;
 
-      for (let attempt = 1; attempt <= 3; attempt += 1) {
-        try {
-          await syncSingleProductGraphNode(shopId, productNode);
-          synced = true;
-          break;
-        } catch (err) {
-          lastError = err;
-          const msg = String(err?.message || err);
+          for (let attempt = 1; attempt <= 3; attempt += 1) {
+            try {
+              await syncSingleProductGraphNode(shopId, productNode);
+              synced = true;
+              break;
+            } catch (err) {
+              lastError = err;
+              const msg = String(err?.message || err);
 
-          const retryable =
-            msg.includes("Unable to start a transaction in the given time") ||
-            msg.includes("timeout") ||
-            msg.includes("Timed out") ||
-            msg.includes("Too many connections");
+              const retryable =
+                msg.includes("Unable to start a transaction in the given time") ||
+                msg.includes("timeout") ||
+                msg.includes("Timed out") ||
+                msg.includes("Too many connections");
 
-          if (!retryable || attempt === 3) {
-            throw err;
+              if (!retryable || attempt === 3) {
+                throw err;
+              }
+
+              await sleep(100 * attempt);
+            }
           }
 
-          await sleep(100 * attempt);
-        }
-      }
+          if (!synced && lastError) {
+            throw lastError;
+          }
+        },
+      );
 
-      if (!synced && lastError) {
-        throw lastError;
-      }
-    },
-  );
+      const pageInfo = response?.data?.products?.pageInfo;
+      const hasNextPage = Boolean(pageInfo?.hasNextPage);
+      const nextCursor =
+        hasNextPage && edges.length > 0 ? edges[edges.length - 1].cursor : null;
 
-  const pageInfo = response?.data?.products?.pageInfo;
-  const hasNextPage = Boolean(pageInfo?.hasNextPage);
-  const nextCursor =
-    hasNextPage && edges.length > 0 ? edges[edges.length - 1].cursor : null;
-
-  return res.json({
-    data: {
-      syncProductsToDb: {
-        synced: edges.length,
-        nextCursor,
-        hasNextPage,
-      },
-    },
-  });
-}
+      return res.json({
+        data: {
+          syncProductsToDb: {
+            synced: edges.length,
+            nextCursor,
+            hasNextPage,
+          },
+        },
+      });
+    }
 
     if (query.includes("productsByFilter")) {
       const input = variables?.input ?? {};

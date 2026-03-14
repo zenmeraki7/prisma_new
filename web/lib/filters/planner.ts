@@ -6,10 +6,6 @@ import {
   compileFastWhere,
   type FastCompilerContext,
 } from "./fastCompiler";
-import {
-  compileSnapshotWhere,
-  type SnapshotCompilerContext,
-} from "./snapshotCompiler";
 import { FILTER_REGISTRY } from "./registry";
 
 // ---------------------------------------------------------
@@ -18,24 +14,14 @@ import { FILTER_REGISTRY } from "./registry";
 
 export interface PlannerResult {
   fastQuery: Prisma.ProductLiteWhereInput;
-  snapshotQuery: Prisma.SnapshotProductWhereInput;
   meta: {
     fastFiltersCount: number;
-    snapshotFiltersCount: number;
     astDepth: number;
   };
 }
 
 export interface PlannerContext {
   shopId: string;
-  /**
-   * Optional for analysis / FAST-only resolvers.
-   * If omitted and snapshot filters are present:
-   *  - meta.snapshotFiltersCount is still correct
-   *  - snapshotQuery stays {}
-   *  - Caller is expected to act on meta (e.g. error or fallback)
-   */
-  snapshotRunId?: string | bigint;
 }
 
 // ---------------------------------------------------------
@@ -44,134 +30,101 @@ export interface PlannerContext {
 
 export const FilterPlanner = {
   /**
-   * Main entry point.
+   * FAST-only planner.
    *
-   * - Splits the AST into FAST and SNAPSHOT subtrees.
-   * - Always compiles FAST subtree.
-   * - Compiles SNAPSHOT subtree **only if** snapshotRunId is provided.
-   *
-   * This lets you:
-   *   - Use it in FAST-only endpoints (no snapshotRunId) just to see
-   *     whether any snapshot filters exist (via meta).
-   *   - Use it in HYBRID endpoints (productsByFilter) to fully compile both.
+   * - Validates/keeps only FAST-plane filters.
+   * - Compiles FAST subtree into Prisma ProductLiteWhereInput.
+   * - Returns simple metadata for debugging / UI.
    */
   plan(expr: FilterExpr | null, ctx: PlannerContext): PlannerResult {
+    const { fastExpr, depth } = extractFastAst(expr);
+
     const meta = {
-      fastFiltersCount: 0,
-      snapshotFiltersCount: 0,
-      astDepth: 0,
+      fastFiltersCount: countLeaves(fastExpr),
+      astDepth: depth,
     };
 
-    // 1. Split AST (FAST vs SNAPSHOT)
-    const { fastExpr, snapshotExpr, depth } = splitAst(expr);
-    meta.astDepth = depth;
-
-    meta.fastFiltersCount = countLeaves(fastExpr);
-    meta.snapshotFiltersCount = countLeaves(snapshotExpr);
-
-    // 2. Compile FAST query (always)
     const fastCtx: FastCompilerContext = { shopId: ctx.shopId };
     const fastQuery = compileFastWhere(fastExpr, fastCtx);
 
-    // 3. Compile SNAPSHOT query (only if we have runId + expr)
-    let snapshotQuery: Prisma.SnapshotProductWhereInput = {};
-
-    if (snapshotExpr && ctx.snapshotRunId != null) {
-      const snapCtx: SnapshotCompilerContext = {
-        shopId: ctx.shopId,
-        snapshotRunId: ctx.snapshotRunId,
-      };
-      snapshotQuery = compileSnapshotWhere(snapshotExpr, snapCtx);
-    }
-
-    // NOTE:
-    // - If snapshotExpr exists but snapshotRunId is missing, snapshotQuery
-    //   remains {} and meta.snapshotFiltersCount > 0.
-    // - Callers like fastProducts can enforce FAST-only via meta, without
-    //   touching snapshotQuery at all.
-
     return {
       fastQuery,
-      snapshotQuery,
       meta,
     };
   },
 };
 
 // ---------------------------------------------------------
-// AST Splitter
+// FAST AST extractor
 // ---------------------------------------------------------
 
-interface SplitResult {
+interface ExtractFastResult {
   fastExpr: FilterExpr | null;
-  snapshotExpr: FilterExpr | null;
   depth: number;
 }
 
-function splitAst(expr: FilterExpr | null, currentDepth = 1): SplitResult {
+function extractFastAst(
+  expr: FilterExpr | null,
+  currentDepth = 1,
+): ExtractFastResult {
   if (!expr) {
-    return { fastExpr: null, snapshotExpr: null, depth: currentDepth };
+    return { fastExpr: null, depth: currentDepth };
   }
 
   if (expr.kind === "group") {
     const fastChildren: FilterExpr[] = [];
-    const snapshotChildren: FilterExpr[] = [];
     let maxChildDepth = currentDepth;
 
     for (const child of expr.children) {
-      const result = splitAst(child, currentDepth + 1);
+      const result = extractFastAst(child, currentDepth + 1);
 
-      if (result.fastExpr) fastChildren.push(result.fastExpr);
-      if (result.snapshotExpr) snapshotChildren.push(result.snapshotExpr);
+      if (result.fastExpr) {
+        fastChildren.push(result.fastExpr);
+      }
 
       maxChildDepth = Math.max(maxChildDepth, result.depth);
     }
 
     let fastExpr: FilterExpr | null = null;
+
     if (fastChildren.length > 0) {
       if (expr.op === "NOT") {
-        fastExpr = { kind: "group", op: "NOT", children: [fastChildren[0]] };
-      } else {
-        fastExpr = { kind: "group", op: expr.op, children: fastChildren };
-      }
-    }
-
-    let snapshotExpr: FilterExpr | null = null;
-    if (snapshotChildren.length > 0) {
-      if (expr.op === "NOT") {
-        snapshotExpr = {
+        fastExpr = {
           kind: "group",
           op: "NOT",
-          children: [snapshotChildren[0]],
+          children: [fastChildren[0]],
         };
       } else {
-        snapshotExpr = {
+        fastExpr = {
           kind: "group",
           op: expr.op,
-          children: snapshotChildren,
+          children: fastChildren,
         };
       }
     }
 
-    return { fastExpr, snapshotExpr, depth: maxChildDepth };
+    return { fastExpr, depth: maxChildDepth };
   }
 
-  // field / leaf
   if (expr.kind === "field") {
     const def = FILTER_REGISTRY[expr.key];
+
     if (!def) {
       console.warn(`[FilterPlanner] Dropping unknown filter key "${expr.key}"`);
-      return { fastExpr: null, snapshotExpr: null, depth: currentDepth };
+      return { fastExpr: null, depth: currentDepth };
     }
 
-    if (def.db.plane === "FAST") {
-      return { fastExpr: expr, snapshotExpr: null, depth: currentDepth };
-    } else {
-      return { fastExpr: null, snapshotExpr: expr, depth: currentDepth };
+    if (def.db.plane !== "FAST") {
+      console.warn(
+        `[FilterPlanner] Dropping non-FAST filter key "${expr.key}" from FAST-only planner`,
+      );
+      return { fastExpr: null, depth: currentDepth };
     }
+
+    return { fastExpr: expr, depth: currentDepth };
   }
 
-  return { fastExpr: null, snapshotExpr: null, depth: currentDepth };
+  return { fastExpr: null, depth: currentDepth };
 }
 
 // ---------------------------------------------------------

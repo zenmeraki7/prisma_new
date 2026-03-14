@@ -1,7 +1,7 @@
 // FILE: web/lib/filters/fastCompiler.ts
 
 import type { Prisma } from "@prisma/client";
-import type { FilterExpr, FilterFieldExpr, GroupOp, Operator } from "./dsl";
+import type { FilterExpr, FilterFieldExpr, GroupOp, Operator } from "../../frontend/lib/filters/dsl";
 import {
   FILTER_REGISTRY,
   type FilterDefinition,
