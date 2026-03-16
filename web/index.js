@@ -4,6 +4,9 @@ import { readFileSync } from "fs";
 import express from "express";
 import serveStatic from "serve-static";
 
+// bulk edit routes
+import bulkEditRoutes from "./routes/bulkEdit.routes.js";
+
 import shopify from "./shopify.js";
 import productCreator from "./product-creator.js";
 import PrivacyWebhookHandlers from "./privacy.js";
@@ -1609,6 +1612,10 @@ app.post(
 );
 
 app.use("/api/*", shopify.validateAuthenticatedSession());
+
+// bulk edit router
+app.use("/api/bulk-edit", bulkEditRoutes);
+
 
 /* -------------------------------------------------------------------------- */
 /* GraphQL-lite endpoint                                                       */

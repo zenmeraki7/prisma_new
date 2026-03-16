@@ -8,12 +8,12 @@ datasource db {
 }
 
 model ShopState {
-  shopId         String   @id
-  fastReady      Boolean  @default(false)
+  shopId         String    @id
+  fastReady      Boolean   @default(false)
   fastLastSyncAt DateTime?
-  fastRevision   Int      @default(0)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  fastRevision   Int       @default(0)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 }
 
 /**
@@ -21,46 +21,58 @@ model ShopState {
  * One row per Shopify product per shop.
  */
 model ProductLite {
-  shopId                   String
-  id                       String
+  shopId String
+  id     String
 
-  title                    String
-  handle                   String
-  status                   String
+  /**
+   * Full GraphQL GID for direct bulk mutation execution.
+   * Example: gid://shopify/Product/1234567890
+   */
+  shopifyGid String?
 
-  vendor                   String?
-  productType              String?
-  categoryId               String?
-  categoryName             String?
+  title  String
+  handle String
+  status String
 
-  description              String?
-  templateSuffix           String?
+  vendor       String?
+  productType  String?
+  categoryId   String?
+  categoryName String?
 
-  seoHidden                Boolean                    @default(false)
-  visibleOnlineStore       Boolean                    @default(false)
-  visiblePos               Boolean                    @default(false)
+  description    String?
+  templateSuffix String?
 
-  option1Name              String?
-  option2Name              String?
-  option3Name              String?
+  seoHidden          Boolean @default(false)
+  visibleOnlineStore Boolean @default(false)
+  visiblePos         Boolean @default(false)
 
-  tags                     String[]                   @default([])
-  hasImages                Boolean                    @default(false)
+  option1Name String?
+  option2Name String?
+  option3Name String?
 
-  createdAtShopify         DateTime?
-  updatedAtShopify         DateTime?
-  publishedAtShopify       DateTime?
+  tags      String[] @default([])
+  hasImages Boolean  @default(false)
 
-  updatedAt                DateTime                   @default(now()) @updatedAt
+  createdAtShopify   DateTime?
+  updatedAtShopify   DateTime?
+  publishedAtShopify DateTime?
 
-  collections              ProductCollection[]
-  inventoryByLoc           ProductInventoryLocation[]
-  optionValues             ProductOptionValue[]
-  tagsJoin                 ProductTag[]
-  variants                 VariantLite[]
-  variantRollup            VariantRollup?
+  updatedAt DateTime @default(now()) @updatedAt
+
+  collections    ProductCollection[]
+  inventoryByLoc ProductInventoryLocation[]
+  optionValues   ProductOptionValue[]
+  tagsJoin       ProductTag[]
+  variants       VariantLite[]
+  variantRollup  VariantRollup?
+
+  /**
+   * Bulk edit relations
+   */
+  bulkEditItems BulkEditJobItem[]
 
   @@id([shopId, id])
+  @@index([shopId, shopifyGid])
   @@index([shopId, updatedAtShopify(sort: Desc)])
   @@index([shopId, title])
   @@index([shopId, handle])
@@ -78,27 +90,27 @@ model ProductLite {
  * Rollup per product for fast product-level filters.
  */
 model VariantRollup {
-  shopId                   String
-  productId                String
+  shopId    String
+  productId String
 
-  variantCount             Int         @default(0)
-  totalInventory           Int         @default(0)
+  variantCount   Int @default(0)
+  totalInventory Int @default(0)
 
-  minPrice                 Decimal?    @db.Decimal(18, 6)
-  maxPrice                 Decimal?    @db.Decimal(18, 6)
+  minPrice Decimal? @db.Decimal(18, 6)
+  maxPrice Decimal? @db.Decimal(18, 6)
 
-  minCompareAtPrice        Decimal?    @db.Decimal(18, 6)
-  maxCompareAtPrice        Decimal?    @db.Decimal(18, 6)
+  minCompareAtPrice Decimal? @db.Decimal(18, 6)
+  maxCompareAtPrice Decimal? @db.Decimal(18, 6)
 
-  minCost                  Decimal?    @db.Decimal(18, 6)
-  maxCost                  Decimal?    @db.Decimal(18, 6)
+  minCost Decimal? @db.Decimal(18, 6)
+  maxCost Decimal? @db.Decimal(18, 6)
 
-  hasOutOfStockVariant     Boolean     @default(false)
-  hasInStockVariant        Boolean     @default(false)
+  hasOutOfStockVariant Boolean @default(false)
+  hasInStockVariant    Boolean @default(false)
 
-  updatedAt                DateTime    @default(now()) @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
 
-  product                  ProductLite @relation(fields: [shopId, productId], references: [shopId, id], onDelete: Cascade)
+  product ProductLite @relation(fields: [shopId, productId], references: [shopId, id], onDelete: Cascade)
 
   @@id([shopId, productId])
   @@index([shopId, totalInventory])
@@ -108,7 +120,8 @@ model VariantRollup {
 }
 
 /**
- * Job ledger
+ * Generic platform job ledger.
+ * Keep this for FAST sync / refresh / snapshot orchestration.
  */
 model JobLedger {
   id         String    @id @default(cuid())
@@ -157,47 +170,67 @@ model ProductCollection {
  * One row per Shopify variant per shop.
  */
 model VariantLite {
-  id                    BigInt      @id @default(autoincrement())
-  shopId                String
-  variantId             String
-  productId             String
+  id        BigInt @id @default(autoincrement())
+  shopId    String
+  variantId String
 
-  title                 String?
+  /**
+   * Full GraphQL GID for direct bulk mutation execution.
+   * Example: gid://shopify/ProductVariant/1234567890
+   */
+  variantGid String?
 
-  sku                   String?
-  barcode               String?
+  productId String
 
-  price                 Decimal?    @db.Decimal(18, 6)
-  compareAtPrice        Decimal?    @db.Decimal(18, 6)
-  cost                  Decimal?    @db.Decimal(18, 6)
+  /**
+   * Denormalized parent product GID to simplify grouped variant bulk mutations.
+   * Example: gid://shopify/Product/1234567890
+   */
+  productGid String?
+
+  title String?
+
+  sku     String?
+  barcode String?
+
+  price          Decimal? @db.Decimal(18, 6)
+  compareAtPrice Decimal? @db.Decimal(18, 6)
+  cost           Decimal? @db.Decimal(18, 6)
 
   /**
    * Materialized for fast filtering/sorting.
    * You can also recompute from price/cost during sync.
    * Example: ((price - cost) / NULLIF(price, 0)) * 100
    */
-  profitMarginPct       Decimal?    @db.Decimal(9, 4)
+  profitMarginPct Decimal? @db.Decimal(9, 4)
 
-  taxable               Boolean?
-  trackQuantity         Boolean?
-  requiresShipping      Boolean?
+  taxable          Boolean?
+  trackQuantity    Boolean?
+  requiresShipping Boolean?
 
-  inventoryQty          Int         @default(0)
-  inventoryPolicy       String?
+  inventoryQty    Int     @default(0)
+  inventoryPolicy String?
 
-  countryOfOrigin       String?
-  hsTariffCode          String?
+  countryOfOrigin String?
+  hsTariffCode    String?
 
-  weightGrams           Int?
-  weightUnit            String?
+  weightGrams Int?
+  weightUnit  String?
 
-  option1Value          String?
-  option2Value          String?
-  option3Value          String?
+  option1Value String?
+  option2Value String?
+  option3Value String?
 
-  product               ProductLite @relation(fields: [shopId, productId], references: [shopId, id], onDelete: Cascade)
+  product ProductLite @relation(fields: [shopId, productId], references: [shopId, id], onDelete: Cascade)
+
+  /**
+   * Bulk edit relations
+   */
+  bulkEditItems BulkEditJobItem[]
 
   @@unique([shopId, variantId])
+  @@index([shopId, variantGid])
+  @@index([shopId, productGid])
   @@index([shopId, productId])
   @@index([shopId, sku])
   @@index([shopId, barcode])
@@ -250,10 +283,170 @@ model ProductInventoryLocation {
   @@index([shopId, locationName, productId])
 }
 
+/**
+ * Dedicated bulk edit execution job.
+ * This is separate from JobLedger because bulk-edit needs
+ * immutable filter/edit snapshots and Shopify bulk-op metadata.
+ */
+model BulkEditJob {
+  id     String @id @default(cuid())
+  shopId String
+
+  status BulkEditJobStatus @default(QUEUED)
+  scope  BulkEditScope
+  action BulkEditAction
+
+  /**
+   * Canonical field key from your bulk-edit registry.
+   * Examples:
+   * - product.title
+   * - product.vendor
+   * - product.tags
+   * - variant.price
+   * - variant.compareAtPrice
+   * - variant.sku
+   * - variant.barcode
+   */
+  fieldKey String
+
+  /**
+   * Immutable snapshots for deterministic retries/audit.
+   */
+  filterExprJson Json
+
+  rawFilterExprJson Json?
+  compiledWhereJson Json?
+  selectionMode     String?
+
+  editPayloadJson Json
+
+  /**
+   * Optional dedupe guard:
+   * hash(shopId + normalizedFilter + normalizedEdit)
+   */
+  idempotencyKey String?
+
+  /**
+   * Selection/build metrics
+   */
+  selectedCount  Int?
+  inputLineCount Int?
+  previewCount   Int?
+
+  /**
+   * Shopify mutation metadata
+   */
+  mutationName      String
+  bulkOperationId   String?
+  stagedUploadPath  String?
+  stagedResourceUrl String?
+
+  /**
+   * Shopify result metadata
+   */
+  resultUrl      String?
+  partialDataUrl String?
+  objectCount    Int?
+  fileSizeBytes  BigInt?
+  errorCode      String?
+  errorMessage   String?
+
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  items BulkEditJobItem[]
+
+  @@unique([shopId, idempotencyKey])
+  @@index([shopId, status, createdAt])
+  @@index([shopId, scope, status])
+  @@index([shopId, bulkOperationId])
+  @@index([shopId, createdAt])
+}
+
+model BulkEditPreset {
+  id     String @id @default(cuid())
+  shopId String
+
+  name        String
+  description String?
+
+  scope    BulkEditScope
+  fieldKey String
+  action   BulkEditAction
+
+  valueJson      Json
+  filterExprJson Json
+
+  isFavorite Boolean @default(false)
+  isArchived Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([shopId, createdAt])
+  @@index([shopId, isFavorite, createdAt])
+  @@index([shopId, isArchived, createdAt])
+}
+
+/**
+ * Optional but strongly recommended per-row/item audit table.
+ * Use this for:
+ * - failed row CSV
+ * - retry failed rows only
+ * - exact before/after audit trail
+ */
+model BulkEditJobItem {
+  id     String @id @default(cuid())
+  jobId  String
+  shopId String
+
+  productId  String?
+  productGid String?
+  variantId  String?
+  variantGid String?
+
+  /**
+   * Line number in the generated JSONL file.
+   * Useful for correlating input/result rows.
+   */
+  inputLineNumber Int?
+
+  /**
+   * Stored input/result blobs for audit/debugging.
+   */
+  inputJson      Json?
+  resultJson     Json?
+  userErrorsJson Json?
+
+  success      Boolean?
+  errorMessage String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  job BulkEditJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  /**
+   * Optional relation to ProductLite when productId is present.
+   */
+  product ProductLite? @relation(fields: [shopId, productId], references: [shopId, id], onDelete: Cascade)
+
+  variant VariantLite? @relation(fields: [shopId, variantId], references: [shopId, variantId], onDelete: Cascade)
+
+  @@index([jobId])
+  @@index([shopId, jobId])
+  @@index([shopId, productId])
+  @@index([shopId, variantId])
+  @@index([jobId, success])
+  @@index([jobId, inputLineNumber])
+}
+
 enum JobType {
   FAST_FULL_SYNC
   FAST_DELTA_REFRESH
-
+  SNAPSHOT_RUN
 }
 
 enum JobStatus {
@@ -261,4 +454,27 @@ enum JobStatus {
   RUNNING
   SUCCEEDED
   FAILED
+}
+
+enum BulkEditScope {
+  PRODUCT
+  VARIANT
+}
+
+enum BulkEditAction {
+  SET
+  APPEND
+  REMOVE
+  REPLACE
+}
+
+enum BulkEditJobStatus {
+  QUEUED
+  BUILDING
+  UPLOADING
+  SUBMITTED
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
 }
