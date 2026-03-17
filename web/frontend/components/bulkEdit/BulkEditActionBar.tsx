@@ -22,6 +22,7 @@ import type {
 
 interface BulkEditActionBarProps {
   filterExpr: FilterExpr;
+    selectedIds: string[];
   filteredCount?: number | null;
 
   onJobStarted?: (jobId: string) => void;

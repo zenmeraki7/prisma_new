@@ -7,14 +7,14 @@ import {
   getBulkEditJobInternalById,
   updateBulkEditJob,
   markBulkEditJobFailed,
-} from "../repositories/bulkEdit.repository.js";
-import { getBulkEditPlanOrThrow } from "../services/bulkEdit/bulkEditPlanner.service.js";
-import { streamBulkEditJsonlFromDb } from "../services/bulkEdit/bulkEditStreamingJsonlBuilder.service.js";
-import { createAndUploadBulkMutationJsonl } from "../services/shopify/stagedUpload.service.js";
+} from "../../repositories/bulkEdit.repository.js";
+import { getBulkEditPlanOrThrow } from "../../services/bulkEdit/bulkEditPlanner.service.js";
+import { streamBulkEditJsonlFromDb } from "../../services/bulkEdit/bulkEditStreamingJsonlBuilder.service.js";
+import { createAndUploadBulkMutationJsonl } from "../../services/shopify/bulkEdit/stagedUpload.service.js";
 import {
   runBulkMutation,
   mapShopifyBulkStatusToLocalStatus,
-} from "../services/shopify/bulkOperation.service.js";
+} from "../../services/shopify/bulkEdit/bulkOperation.service.js";
 
 export const BULK_EDIT_QUEUE_NAME = "bulk-edit";
 

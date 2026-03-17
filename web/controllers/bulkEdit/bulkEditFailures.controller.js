@@ -2,7 +2,7 @@
 
 // FILE: web/controllers/bulkEditFailures.controller.js
 
-import { listAllFailedBulkEditJobItems } from "../repositories/bulkEdit.repository.js";
+import { listAllFailedBulkEditJobItems } from "../../repositories/bulkEdit.repository.js";
 
 function extractShop(req) {
   return (

@@ -1,5 +1,3 @@
-// FILE: web/frontend/components/ProductIndexTable.tsx
-
 import React from "react";
 import {
   IndexTable,
@@ -21,6 +19,10 @@ interface ProductIndexTableProps {
   loading: boolean;
   hasNextPage: boolean;
   onLoadMore: () => void;
+
+  /* 🔥 NEW */
+  selectedIds: string[];
+  onSelectionChange: (ids: string[]) => void;
 }
 
 function formatUpdatedAt(value: string | Date | null | undefined): string {
@@ -52,13 +54,24 @@ export const ProductIndexTable: React.FC<ProductIndexTableProps> = ({
   loading,
   hasNextPage,
   onLoadMore,
+  selectedIds,
+  onSelectionChange,
 }) => {
   const navigate = useNavigate();
 
   const resourceName = { singular: "product", plural: "products" };
 
-  const { selectedResources, allResourcesSelected, handleSelectionChange } =
-    useIndexResourceState(products as any);
+  const {
+    selectedResources,
+    allResourcesSelected,
+    handleSelectionChange,
+  } = useIndexResourceState(products as any, {
+    selectedResources: selectedIds,
+  });
+
+  React.useEffect(() => {
+    onSelectionChange(selectedResources as string[]);
+  }, [selectedResources]);
 
   const headings = [
     { title: "" },
@@ -73,10 +86,6 @@ export const ProductIndexTable: React.FC<ProductIndexTableProps> = ({
 
   const rowMarkup = products.map((p, index) => {
     const isSelected = selectedResources.includes(p.id);
-
-    const handleTitleClick = () => {
-      navigate(`/products/${encodeURIComponent(p.id)}`);
-    };
 
     return (
       <IndexTable.Row
@@ -94,76 +103,47 @@ export const ProductIndexTable: React.FC<ProductIndexTableProps> = ({
         </IndexTable.Cell>
 
         <IndexTable.Cell>
-          <div onClick={(e) => e.stopPropagation()}>
-            <Button
-              variant="plain"
-              onClick={handleTitleClick}
-              removeUnderline
-            >
-              {p.title}
-            </Button>
-          </div>
+          <Button
+            variant="plain"
+            onClick={() => navigate(`/products/${p.id}`)}
+            removeUnderline
+          >
+            {p.title}
+          </Button>
         </IndexTable.Cell>
 
         <IndexTable.Cell>
-          <Text
-            as="span"
-            variant="bodySm"
-            tone={p.vendor ? "base" : "subdued"}
-          >
+          <Text as="p" tone={p.vendor ? "base" : "subdued"}>
             {p.vendor || "—"}
           </Text>
         </IndexTable.Cell>
 
         <IndexTable.Cell>
-          <Badge tone={statusTone(p.status)}>{statusLabel(p.status)}</Badge>
+          <Badge tone={statusTone(p.status)}>
+            {statusLabel(p.status)}
+          </Badge>
         </IndexTable.Cell>
 
         <IndexTable.Cell>
-          <Text as="span" numeric>
+          <Text as="p" numeric>
             {p.totalInventory != null ? `${p.totalInventory} in stock` : "—"}
           </Text>
-          <Text as="span" variant="bodySm" tone="subdued">
-            <br />
-            {p.variantCount != null
-              ? `${p.variantCount} ${p.variantCount === 1 ? "variant" : "variants"}`
-              : "— variants"}
-          </Text>
         </IndexTable.Cell>
 
         <IndexTable.Cell>
-          <Text
-            as="span"
-            variant="bodySm"
-            tone={p.productType ? "base" : "subdued"}
-          >
+          <Text as="p" tone={p.productType ? "base" : "subdued"}>
             {p.productType || "—"}
           </Text>
         </IndexTable.Cell>
 
         <IndexTable.Cell>
-          {p.tags?.length ? (
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-              {p.tags.slice(0, 3).map((tag) => (
-                <Badge key={tag} tone="new" size="small">
-                  {tag}
-                </Badge>
-              ))}
-              {p.tags.length > 3 && (
-                <Text as="span" variant="bodySm" tone="subdued">
-                  +{p.tags.length - 3}
-                </Text>
-              )}
-            </div>
-          ) : (
-            <Text as="span" variant="bodySm" tone="subdued">
-              —
-            </Text>
-          )}
+          {p.tags?.slice(0, 3).map((tag) => (
+            <Badge key={tag}>{tag}</Badge>
+          ))}
         </IndexTable.Cell>
 
         <IndexTable.Cell>
-          <Text as="span" variant="bodySm" tone="subdued">
+          <Text as="p" tone="subdued">
             {formatUpdatedAt(p.updatedAtShopify)}
           </Text>
         </IndexTable.Cell>
@@ -171,55 +151,14 @@ export const ProductIndexTable: React.FC<ProductIndexTableProps> = ({
     );
   });
 
-  if (loading && products.length === 0) {
-    return (
-      <Card>
-        <IndexTable
-          resourceName={resourceName}
-          itemCount={10}
-          selectedItemsCount={0}
-          onSelectionChange={() => {}}
-          headings={headings as any}
-        >
-          {Array.from({ length: 5 }).map((_, i) => (
-            <IndexTable.Row id={`skel-${i}`} key={i} position={i}>
-              <IndexTable.Cell>
-                <SkeletonThumbnail size="small" />
-              </IndexTable.Cell>
-              <IndexTable.Cell>
-                <SkeletonBodyText lines={1} />
-              </IndexTable.Cell>
-              <IndexTable.Cell>
-                <SkeletonBodyText lines={1} />
-              </IndexTable.Cell>
-              <IndexTable.Cell>
-                <SkeletonBodyText lines={1} />
-              </IndexTable.Cell>
-              <IndexTable.Cell>
-                <SkeletonBodyText lines={2} />
-              </IndexTable.Cell>
-              <IndexTable.Cell>
-                <SkeletonBodyText lines={1} />
-              </IndexTable.Cell>
-              <IndexTable.Cell>
-                <SkeletonBodyText lines={1} />
-              </IndexTable.Cell>
-              <IndexTable.Cell>
-                <SkeletonBodyText lines={1} />
-              </IndexTable.Cell>
-            </IndexTable.Row>
-          ))}
-        </IndexTable>
-      </Card>
-    );
-  }
-
   return (
     <Card padding="0">
       <IndexTable
         resourceName={resourceName}
         itemCount={products.length}
-        selectedItemsCount={allResourcesSelected ? "All" : selectedResources.length}
+        selectedItemsCount={
+          allResourcesSelected ? "All" : selectedResources.length
+        }
         onSelectionChange={handleSelectionChange}
         headings={headings as any}
         pagination={{ hasNext: hasNextPage, onNext: onLoadMore }}

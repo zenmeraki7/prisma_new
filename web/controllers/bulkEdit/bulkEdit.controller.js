@@ -2,26 +2,26 @@
 
 import crypto from "node:crypto";
 
-import { compileFastWhere } from "../lib/filters/fastCompiler";
-import { compileFastVariantWhere } from "../lib/filters/fastVariantCompiler";
-import { prisma } from "../db/prisma.js";
+import { compileFastWhere } from "../../lib/filters/fastCompiler.ts";
+import { compileFastVariantWhere } from "../../lib/filters/fastVariantCompiler.ts";
+import { prisma } from "../../db/prisma.js";
 import {
   createBulkEditJob,
   getBulkEditJobById,
   updateBulkEditJob,
-} from "../repositories/bulkEdit.repository.js";
+} from "../../repositories/bulkEdit.repository.js";
 import {
   getBulkEditPlanOrThrow,
   normalizeBulkEditPayload,
-} from "../services/bulkEdit/bulkEditPlanner.service.js";
+} from "../../services/bulkEdit/bulkEditPlanner.service.js";
 import {
   bulkEditQueue,
   BULK_EDIT_QUEUE_NAME,
-} from "../workers/processBulkEdit.worker.js";
+} from "../../workers/bulkEdit/processBulkEdit.worker.js";
 import {
   getBulkOperationById,
   mapShopifyBulkStatusToLocalStatus,
-} from "../services/shopify/bulkOperation.service.js";
+} from "../../services/shopify/bulkEdit/bulkOperation.service.js";
 
 function extractShop(req) {
   return (

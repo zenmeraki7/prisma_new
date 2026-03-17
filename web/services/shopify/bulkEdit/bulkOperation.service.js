@@ -1,6 +1,6 @@
 // FILE: web/services/shopify/bulkOperation.service.js
 
-import shopify from "../../shopify.js";
+import shopify from "../../../shopify.js";
 
 const API_VERSION = process.env.SHOPIFY_ADMIN_API_VERSION || "2026-01";
 

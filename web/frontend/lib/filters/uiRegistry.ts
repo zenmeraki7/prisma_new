@@ -29,10 +29,12 @@ export type FilterKey =
   | "product.tag"
   | "product.template"
   | "product.title"
+  |"product.search" // ✅ ADD THIS
   | "product.variantCount"
   | "product.vendor"
   | "product.visibleOnlineStore"
   | "product.visiblePos"
+       
   // ─────────────── Variant filters ───────────────
   | "variant.barcode"
   | "variant.chargeTax"

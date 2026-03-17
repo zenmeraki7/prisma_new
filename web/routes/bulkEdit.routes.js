@@ -1,6 +1,6 @@
 import express from "express";
 
-import { listBulkEditJobsController } from "./controllers/bulkEditHistory.controller.js";
+import { listBulkEditJobsController } from "../controllers/bulkEdit/bulkEditHistory.controller.js";
 
 import {
   listBulkEditPresetsController,
@@ -8,19 +8,26 @@ import {
   createBulkEditPresetController,
   updateBulkEditPresetController,
   deleteBulkEditPresetController,
-} from "./controllers/bulkEditPreset.controller.js";
-import { runBulkEditPresetController } from "./controllers/bulkEditPresetRun.controller.js";
+} from "../controllers/bulkEdit/bulkEditPreset.controller.js";
+import { runBulkEditPresetController } from "../controllers/bulkEdit/bulkEditPresetRun.controller.js";
 
 import {
   createBulkEditJobController,
   getBulkEditJobController,
-} from "../controllers/bulkEdit.controller.js";
+} from "../controllers/bulkEdit/bulkEdit.controller.js";
 
-import { retryFailedBulkEditJobController } from "./controllers/bulkEditRetry.controller.js";
-import { downloadBulkEditFailuresCsvController } from "./controllers/bulkEditFailures.controller.js";
-import { bulkOperationsFinishWebhookController } from "./controllers/bulkEditWebhook.controller.js";
+import { retryFailedBulkEditJobController } from "../controllers/bulkEdit/bulkEditRetry.controller.js";
+import { downloadBulkEditFailuresCsvController } from "../controllers/bulkEdit/bulkEditFailures.controller.js";
+import { bulkOperationsFinishWebhookController } from "../controllers/bulkEdit/bulkEditWebhook.controller.js";
+import { getBulkEditJobByIdController, getBulkEditJobsController } from "../controllers/bulkEdit/getBulkEditJob.controller.js";
+import { cancelBulkEditJobController } from "../controllers/bulkEdit/cancelBulkEditJob.controller.js";
 
 const router = express.Router();
+
+router.post("/bulk-edit/jobs", createBulkEditJobController);
+router.get("/bulk-edit/jobs", getBulkEditJobsController);
+router.get("/bulk-edit/jobs/:id", getBulkEditJobByIdController);
+router.post("/bulk-edit/jobs/:id/cancel", cancelBulkEditJobController);
 
 router.get("/api/bulk-edit/presets", listBulkEditPresetsController);
 router.post("/api/bulk-edit/presets", createBulkEditPresetController);

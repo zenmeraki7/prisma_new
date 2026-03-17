@@ -6,7 +6,7 @@ import {
   createBulkEditPreset,
   updateBulkEditPreset,
   archiveBulkEditPreset,
-} from "../repositories/bulkEditPreset.repository.js";
+} from "../../repositories/bulkEditPreset.repository.js";
 
 function extractShop(req) {
   return (

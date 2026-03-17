@@ -8,11 +8,11 @@ import {
   getBulkEditJobById,
   createBulkEditJob,
   listAllFailedBulkEditJobItems,
-} from "../repositories/bulkEdit.repository.js";
+} from "../../repositories/bulkEdit.repository.js";
 import {
   bulkEditQueue,
   BULK_EDIT_QUEUE_NAME,
-} from "../workers/processBulkEdit.worker.js";
+} from "../../workers/bulkEdit/processBulkEdit.worker.js";
 
 function extractShop(req) {
   return (

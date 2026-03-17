@@ -1,12 +1,12 @@
 // FILE: web/controllers/bulkEditWebhook.controller.js
 
-import shopify from "../shopify.js";
+import shopify from "../../shopify.js";
 import {
   findBulkEditJobByBulkOperationId,
   updateBulkEditJob,
-} from "../repositories/bulkEdit.repository.js";
-import { parseAndPersistBulkEditResults } from "../services/bulkEdit/bulkEditResultParser.service.js";
-import { mapShopifyBulkStatusToLocalStatus } from "../services/shopify/bulkOperation.service.js";
+} from "../../repositories/bulkEdit.repository.js";
+import { parseAndPersistBulkEditResults } from "../../services/bulkEdit/bulkEditResultParser.service.js";
+import { mapShopifyBulkStatusToLocalStatus } from "../../services/shopify/bulkEdit/bulkOperation.service.js";
 
 /**
  * Shopify bulk_operations/finish webhook payload contains the BulkOperation resource.

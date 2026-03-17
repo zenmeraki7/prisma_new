@@ -14,22 +14,39 @@ import { ProductsFilterBar } from "../components/ProductsFilterBar";
 
 import { useFastPlaneSync } from "../queries/syncProductsToDb";
 
+/* ✅ BULK IMPORTS (FIXED) */
+import BulkEditActionBar from "../components/bulkEdit/BulkEditActionBar";
+import { BulkEditJobHistoryPanel } from "../components/bulkEdit/BulkEditJobHistoryPanel";
+import { BulkEditJobDetailsDrawer } from "../components/bulkEdit/BulkEditJobDetailsDrawer";
+
 export const ProductsPage: React.FC = () => {
   const app = useAppBridge();
 
+  /* ---------------- FILTER STATE ---------------- */
   const [draftFilters, setDraftFilters] = React.useState<DraftFilter[]>([]);
   const [searchText, setSearchText] = React.useState("");
-
   const [appliedExpr, setAppliedExpr] = React.useState<FilterExpr | null>(null);
   const [requestKey, setRequestKey] = React.useState(0);
 
+  /* ---------------- BULK STATE ---------------- */
+  const [selectedIds, setSelectedIds] = React.useState<string[]>([]);
+
+  /* ---------------- JOB STATE ---------------- */
+  const [jobs, setJobs] = React.useState<any[]>([]);
+  const [jobsLoading, setJobsLoading] = React.useState(false);
+  const [selectedJob, setSelectedJob] = React.useState<any | null>(null);
+  const [drawerOpen, setDrawerOpen] = React.useState(false);
+
+  /* ---------------- BUILD FILTER ---------------- */
   const buildExprFrom = React.useCallback(
     (search: string, filters: DraftFilter[]): FilterExpr | null => {
       const leaves: FilterExpr[] = [];
 
       const trimmedSearch = (search ?? "").trim();
       if (trimmedSearch) {
-        leaves.push(field("product.search" as any, "CONTAINS" as any, trimmedSearch));
+        leaves.push(
+          field("product.search" as any, "CONTAINS" as any, trimmedSearch),
+        );
       }
 
       for (const f of Array.isArray(filters) ? filters : []) {
@@ -73,6 +90,7 @@ export const ProductsPage: React.FC = () => {
     [applyCurrentState, searchText],
   );
 
+  /* ---------------- FETCH SUGGESTIONS ---------------- */
   const fetchSuggestions = React.useCallback(async (key: string, q: string) => {
     try {
       const resp = await fetch("/api/graphql", {
@@ -89,9 +107,7 @@ export const ProductsPage: React.FC = () => {
       });
 
       const json = await resp.json().catch(() => null);
-
-      if (!resp.ok) return [];
-      if (json?.errors?.length) return [];
+      if (!resp.ok || json?.errors?.length) return [];
 
       return (json?.data?.filterSuggestions || []) as string[];
     } catch {
@@ -99,6 +115,7 @@ export const ProductsPage: React.FC = () => {
     }
   }, []);
 
+  /* ---------------- DATA FETCH ---------------- */
   const {
     items,
     mode,
@@ -116,8 +133,34 @@ export const ProductsPage: React.FC = () => {
     enabled: true,
   });
 
+  /* ---------------- SYNC ---------------- */
   const syncMutation = useFastPlaneSync(app as any);
 
+  /* ---------------- JOB FETCH ---------------- */
+  const fetchJobs = React.useCallback(async () => {
+    try {
+      setJobsLoading(true);
+      const res = await fetch("/api/bulk-edit/jobs");
+      const json = await res.json();
+      setJobs(json.jobs || []);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setJobsLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    fetchJobs();
+  }, [fetchJobs]);
+
+  /* ---------------- JOB HANDLERS ---------------- */
+  const handleSelectJob = (job: any) => {
+    setSelectedJob(job);
+    setDrawerOpen(true);
+  };
+
+  /* ---------------- UI ---------------- */
   return (
     <Page
       title="Products"
@@ -131,6 +174,7 @@ export const ProductsPage: React.FC = () => {
       }}
     >
       <Layout>
+        {/* FILTER */}
         <Layout.Section>
           <Card padding="0">
             <ProductsFilterBar
@@ -154,6 +198,17 @@ export const ProductsPage: React.FC = () => {
           </Card>
         </Layout.Section>
 
+        {/* BULK BAR */}
+        <Layout.Section>
+          {selectedIds.length > 0 && appliedExpr && (
+            <BulkEditActionBar
+              selectedIds={selectedIds}
+              filterExpr={appliedExpr}
+            />
+          )}
+        </Layout.Section>
+
+        {/* TABLE */}
         <Layout.Section>
           {error ? (
             <Card>
@@ -169,6 +224,8 @@ export const ProductsPage: React.FC = () => {
               loading={loading && items.length === 0}
               hasNextPage={Boolean(hasNextPage)}
               onLoadMore={() => loadMore()}
+              selectedIds={selectedIds}
+              onSelectionChange={setSelectedIds}
             />
           )}
 
@@ -178,7 +235,30 @@ export const ProductsPage: React.FC = () => {
             </div>
           )}
         </Layout.Section>
+
+        {/* JOB HISTORY */}
+        <Layout.Section>
+          <Card>
+            <BulkEditJobHistoryPanel
+              jobs={jobs}
+              loading={jobsLoading}
+              refreshing={false}
+              error={null}
+              onRefresh={fetchJobs}
+              onSelectJob={handleSelectJob}
+              selectedJobId={selectedJob?.id}
+            />
+          </Card>
+        </Layout.Section>
       </Layout>
+
+      {/* DRAWER */}
+      <BulkEditJobDetailsDrawer
+        open={drawerOpen}
+        job={selectedJob}
+        onClose={() => setDrawerOpen(false)}
+        onRetryStarted={fetchJobs}
+      />
     </Page>
   );
 };

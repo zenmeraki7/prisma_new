@@ -6,7 +6,14 @@ import type {
 } from "./uiRegistry";
 
 export type GroupOp = "AND" | "OR" | "NOT";
-export type Operator = FilterOperator;
+export type Operator =
+  | FilterOperator
+  | "ON"
+  | "BEFORE"
+  | "AFTER"
+  | "IS_EMPTY"
+  | "IS_NOT_EMPTY"
+  | "IS";
 
 /**
  * IMPORTANT:

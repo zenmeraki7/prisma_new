@@ -3,7 +3,7 @@
 import { openAsBlob } from "node:fs";
 import { stat } from "node:fs/promises";
 
-import shopify from "../../shopify.js";
+import shopify from "../../../shopify.js";
 
 const API_VERSION = process.env.SHOPIFY_ADMIN_API_VERSION || "2026-01";
 

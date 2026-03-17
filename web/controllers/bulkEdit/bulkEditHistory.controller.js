@@ -1,6 +1,6 @@
 // FILE: web/controllers/bulkEditHistory.controller.js
 
-import { listBulkEditJobs } from "../repositories/bulkEdit.repository.js";
+import { listBulkEditJobs } from "../../repositories/bulkEdit.repository.js";
 
 function extractShop(req) {
   return (

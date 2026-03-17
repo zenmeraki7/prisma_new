@@ -1,6 +1,6 @@
 // FILE: web/controllers/bulkEditPresetRun.controller.js
 
-import { getBulkEditPresetById } from "../repositories/bulkEditPreset.repository.js";
+import { getBulkEditPresetById } from "../../repositories/bulkEditPreset.repository.js";
 import { createBulkEditJobController } from "./bulkEdit.controller.js";
 
 function extractShop(req) {
